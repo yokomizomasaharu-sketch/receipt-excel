@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>領収書スキャン → Excel</title>
+<title>領収書スキャン → Excel ／ 青色申告・税務チェック</title>
 <meta name="theme-color" content="#ffffff">
-<meta name="description" content="領収書を撮影するだけで、端末内OCRで日付・店名・金額・勘定科目を読み取り、Excel（.xlsx）に出力するアプリ。">
+<meta name="description" content="領収書を撮影するだけで、端末内OCRで日付・店名・金額・勘定科目を読み取り、Excel（.xlsx）に出力するアプリ。税務リスク診断・源泉徴収票との損益通算・e-Taxへの転記ボード付き。">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -46,14 +46,14 @@
     font-size: 14px;
     line-height: 1.45;
   }
-  h1, h2, h3, p { margin: 0; }
+  h1, h2, h3, h4, p { margin: 0; }
   button { font-family: inherit; }
   .hidden { display: none !important; }
 
   /* ---------- Header ---------- */
   .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
   .title { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
-  .subtitle { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; }
+  .subtitle { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; line-height: 1.4; }
   .close-btn {
     flex: none; background: var(--fill); border: none; color: var(--ink-2);
     padding: 8px 14px; border-radius: 999px; font-size: 12px; font-weight: 600;
@@ -63,16 +63,28 @@
 
   /* ---------- Mode tabs ---------- */
   .mode-tabs {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
     background: var(--fill); padding: 4px; border-radius: 12px; margin-bottom: 12px;
   }
   .mode-tab {
     border: none; background: transparent; color: var(--ink-2);
-    padding: 10px 6px; border-radius: 9px; font-size: 12.5px; font-weight: 600;
+    padding: 7px 2px; border-radius: 9px; font-size: 10.5px; font-weight: 600; line-height: 1.25;
     cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    min-height: 40px;
+    min-height: 46px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   }
+  .mode-tab .tab-ico { font-size: 15px; line-height: 1.1; }
+  .mode-tab .tab-lbl { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .mode-tab.active { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(15,23,42,.12); }
+
+  /* ---------- Year bar ---------- */
+  .year-bar {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 8px 10px; margin-bottom: 12px;
+  }
+  .year-bar .year-ico { font-size: 14px; flex: none; }
+  .year-select { flex: 1; min-width: 0; font-weight: 700; }
+  .year-bar .mini-btn { min-height: 34px; padding: 5px 11px; flex: none; }
 
   /* ---------- Cards ---------- */
   .card {
@@ -80,7 +92,7 @@
     padding: 14px; margin-bottom: 12px;
   }
   .card-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13.5px; font-weight: 700; margin-bottom: 10px; }
-  .card-title .count { font-size: 11.5px; font-weight: 500; color: var(--ink-2); }
+  .card-title .count { font-size: 11.5px; font-weight: 500; color: var(--ink-2); flex: none; }
 
   /* ---------- KPI ---------- */
   .kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
@@ -103,7 +115,7 @@
     width: 84px; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px;
     font-size: 16px; text-align: right; color: var(--ink); background: #fff;
   }
-  .rate-note { font-size: 10.5px; color: var(--ink-3); margin-top: 7px; line-height: 1.4; }
+  .rate-note { font-size: 10.5px; color: var(--ink-3); margin-top: 7px; line-height: 1.5; }
 
   /* ---------- Capture zone ---------- */
   .capture-zone {
@@ -124,7 +136,7 @@
   .ocr-opts label { font-size: 11.5px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
   .select-mini {
     border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; font-size: 13px;
-    background: #fff; color: var(--ink); min-height: 36px;
+    background: #fff; color: var(--ink); min-height: 36px; max-width: 100%;
   }
   .link-btn { background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 600; padding: 6px 0; cursor: pointer; }
 
@@ -163,7 +175,7 @@
   .fields { margin-top: 10px; }
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; min-width: 0; }
-  .field > span { font-size: 10.5px; color: var(--ink-2); font-weight: 600; }
+  .field > span { font-size: 10.5px; color: var(--ink-2); font-weight: 600; line-height: 1.35; }
   .input {
     width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px;
     font-size: 16px; color: var(--ink); background: #fff; min-height: 42px;
@@ -231,6 +243,8 @@
     min-height: 42px; border: 1px solid var(--line); background: #fff; border-radius: 10px;
     color: var(--ink); font-size: 12.5px; font-weight: 600; cursor: pointer;
   }
+  .btn-ghost.wide { width: 100%; }
+  .btn-ghost:active { background: var(--fill); }
 
   /* ---------- Sticky footer ---------- */
   .sticky-bar {
@@ -259,6 +273,128 @@
   }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
   #toast.err { background: rgba(153,27,27,.96); }
+
+  /* ============================================================
+     タブ3：税務リスク診断
+     ============================================================ */
+  .risk-chips { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .rchip { border-radius: 11px; padding: 9px 11px; border: 1px solid var(--line); background: var(--card); min-width: 0; }
+  .rchip .n { font-size: 19px; font-weight: 700; line-height: 1.1; letter-spacing: -0.02em; }
+  .rchip .t { font-size: 10px; color: var(--ink-2); margin-top: 2px; }
+  .rchip.red { border-color: #fecaca; background: #fef2f2; }
+  .rchip.red .n { color: #b91c1c; }
+  .rchip.amber { border-color: #fde68a; background: #fffbeb; }
+  .rchip.amber .n { color: #b45309; }
+  .rchip.ok { grid-column: 1 / -1; display: flex; align-items: center; gap: 9px; }
+  .rchip.ok .n { font-size: 15px; color: var(--ok); }
+  .rchip.ok.warn .n { color: #b45309; }
+
+  .flag {
+    display: flex; gap: 9px; padding: 10px; border-radius: 11px;
+    border: 1px solid var(--line); margin-bottom: 8px; background: #fff;
+  }
+  .flag:last-child { margin-bottom: 0; }
+  .flag.red { border-left: 4px solid var(--danger); background: #fef7f7; border-color: #f3d6d6; }
+  .flag.amber { border-left: 4px solid var(--warn); background: #fffcf3; border-color: #f2e6c9; }
+  .flag.struct { border-left: 4px solid #7c3aed; background: #faf5ff; border-color: #e6d8f6; }
+  .flag-body { flex: 1; min-width: 0; }
+  .flag-top { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .flag-title { font-size: 11.5px; font-weight: 700; color: #7f1d1d; }
+  .flag.amber .flag-title { color: #92400e; }
+  .flag.struct .flag-title { color: #5b21b6; }
+  .flag-amt { margin-left: auto; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+  .flag-vendor { font-size: 12px; font-weight: 600; margin-top: 3px; word-break: break-word; }
+  .flag-meta { font-size: 10px; color: var(--ink-3); margin-top: 1px; }
+  .flag-why { font-size: 10.5px; line-height: 1.5; color: #6b3b3b; margin-top: 5px; }
+  .flag.amber .flag-why { color: #7a5316; }
+  .flag.struct .flag-why { color: #4c1d95; }
+  .flag-act { margin-top: 7px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .flag-act .mini-btn { min-height: 30px; font-size: 11px; padding: 4px 9px; }
+  .flag-act .mini-btn.danger { color: #b91c1c; border-color: #fecaca; }
+
+  /* ---------- 源泉徴収票 ---------- */
+  .slip { border: 1px solid var(--line); border-radius: 11px; padding: 10px 10px 4px; margin-bottom: 10px; background: #fcfdff; }
+  .slip-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+  .slip-head b { font-size: 12px; }
+  .slip .field { margin-bottom: 7px; }
+  .slip .input { min-height: 40px; padding: 8px 9px; }
+
+  /* ---------- シミュレーション ---------- */
+  .sim-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
+  .sim-row:last-child { border-bottom: none; }
+  .sim-row .k { color: var(--ink-2); flex: 1; min-width: 0; line-height: 1.35; }
+  .sim-row .v { font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .sim-row.big { font-size: 13px; border-top: 2px solid var(--line); border-bottom: none; margin-top: 3px; padding-top: 10px; }
+  .sim-row.big .v { font-size: 16px; }
+  .sim-row .v.neg { color: var(--danger); }
+  .sim-row .v.pos { color: var(--ok); }
+  .sim-row .v.blue { color: var(--accent); }
+  .sim-box { border-radius: 11px; padding: 11px 12px; text-align: center; margin-top: 11px; }
+  .sim-box.refund { background: #ecfdf5; border: 1px solid #a7f3d0; }
+  .sim-box.pay { background: #fef2f2; border: 1px solid #fecaca; }
+  .sim-box.zero { background: var(--fill); border: 1px solid var(--line); }
+  .sim-box .lbl { font-size: 11px; color: var(--ink-2); }
+  .sim-box .amt { font-size: 25px; font-weight: 700; letter-spacing: -0.02em; margin-top: 1px; }
+  .sim-box.refund .amt { color: #047857; }
+  .sim-box.pay .amt { color: #b91c1c; }
+  .hint-ok { font-size: 10.5px; line-height: 1.5; color: var(--ink-2); margin-top: 9px; padding: 8px 10px; background: var(--fill); border-radius: 9px; }
+  .warn-box { font-size: 11px; line-height: 1.55; color: #7c2d12; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px; padding: 9px 11px; margin-top: 10px; }
+  .info-box { font-size: 11px; line-height: 1.55; color: #075985; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; padding: 9px 11px; margin-top: 10px; }
+
+  /* ============================================================
+     タブ4：e-Taxガイド
+     ============================================================ */
+  .deadline { display: flex; align-items: center; gap: 10px; }
+  .deadline .dl-ico { font-size: 24px; }
+  .deadline .dl-main { flex: 1; min-width: 0; }
+  .deadline .dl-title { font-size: 13px; font-weight: 700; }
+  .deadline .dl-sub { font-size: 11px; color: var(--ink-2); margin-top: 2px; line-height: 1.45; }
+
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 10px; overflow: hidden; }
+  .step[open] { box-shadow: 0 1px 3px rgba(15,23,42,.06); }
+  .step > summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 12px 13px; cursor: pointer; min-height: 52px; }
+  .step > summary::-webkit-details-marker { display: none; }
+  .step-ico { font-size: 17px; flex: none; width: 22px; text-align: center; }
+  .step-main { flex: 1; min-width: 0; }
+  .step-title { font-size: 13px; font-weight: 700; line-height: 1.3; }
+  .step-sub { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; line-height: 1.35; }
+  .chk {
+    flex: none; width: 27px; height: 27px; border-radius: 50%; border: 1.5px solid #cbd5e1;
+    background: #fff; color: #fff; font-size: 13px; font-weight: 700; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0;
+  }
+  .chk.on { background: var(--ok); border-color: var(--ok); }
+  .step-body { padding: 0 13px 13px; }
+  .step-item { display: flex; gap: 8px; font-size: 12px; line-height: 1.55; padding: 8px 0; border-top: 1px dashed var(--line); }
+  .step-item .no {
+    flex: none; width: 18px; height: 18px; border-radius: 5px; background: var(--accent-soft);
+    color: #0369a1; font-size: 10px; font-weight: 700; display: flex; align-items: center;
+    justify-content: center; margin-top: 1px;
+  }
+  .step-item .tx { flex: 1; min-width: 0; }
+  .step-item .tx b { display: block; font-size: 12px; font-weight: 700; }
+  .step-item .tx span { display: block; color: var(--ink-2); font-size: 10.5px; margin-top: 1px; line-height: 1.5; }
+  .step-tip { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 9px; padding: 9px 10px; font-size: 10.5px; line-height: 1.55; color: #075985; margin-top: 9px; }
+
+  /* ---------- 転記ボード ---------- */
+  .board-sec { border: 1px solid var(--line); border-radius: 12px; padding: 10px 11px; margin-bottom: 10px; background: #fcfdff; }
+  .board-sec h4 { font-size: 11.5px; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+  .board-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px dashed var(--line); }
+  .board-row:first-of-type { border-top: none; }
+  .board-row .bl { flex: 1; min-width: 0; }
+  .board-row .bl b { display: block; font-size: 12px; font-weight: 700; line-height: 1.3; word-break: break-word; }
+  .board-row .bl span { display: block; font-size: 10px; color: var(--ink-3); margin-top: 1px; line-height: 1.4; }
+  .board-row .bv { flex: none; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .board-row .bv.neg { color: var(--danger); }
+  .copy-btn {
+    flex: none; width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line);
+    background: #fff; color: var(--ink-2); font-size: 13px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; padding: 0;
+  }
+  .copy-btn:active { background: var(--fill); }
+  .copy-btn.done { color: #fff; background: var(--ok); border-color: var(--ok); }
+  .board-total { border-top: 2px solid var(--line) !important; padding-top: 10px !important; }
+  .board-total .bl b { font-size: 12.5px; }
 </style>
 </head>
 <body>
@@ -272,88 +408,183 @@
 </header>
 
 <div class="mode-tabs" role="tablist">
-  <button class="mode-tab active" data-mode="tax" role="tab" aria-selected="true">🧾 青色申告</button>
-  <button class="mode-tab" data-mode="trip" role="tab" aria-selected="false">🇰🇷 韓国旅行 11/14–15</button>
+  <button class="mode-tab active" data-mode="tax" role="tab" aria-selected="true"><span class="tab-ico">🧾</span><span class="tab-lbl">領収書</span></button>
+  <button class="mode-tab" data-mode="trip" role="tab" aria-selected="false"><span class="tab-ico">🇰🇷</span><span class="tab-lbl">旅行費用</span></button>
+  <button class="mode-tab" data-mode="risk" role="tab" aria-selected="false"><span class="tab-ico">🛡️</span><span class="tab-lbl">税務診断</span></button>
+  <button class="mode-tab" data-mode="guide" role="tab" aria-selected="false"><span class="tab-ico">📋</span><span class="tab-lbl">e-Taxガイド</span></button>
 </div>
 
-<!-- KPI -->
-<div class="kpi-grid" id="kpiGrid"></div>
+<div class="year-bar" id="yearBar">
+  <span class="year-ico">📅</span>
+  <select class="select-mini year-select" id="yearSelect" aria-label="年度"></select>
+  <button class="mini-btn" id="btnAddYear" aria-label="年度を追加">＋年度</button>
+</div>
 
-<!-- Trip exchange rate -->
-<div class="card hidden" id="rateCard">
-  <div class="rate-row">
-    <span class="rate-label">💱 為替レート</span>
-    <div class="rate-input-wrap">
-      <span>1₩ =</span>
-      <input class="rate-input" id="rateInput" type="number" inputmode="decimal" step="0.001" min="0.001" value="0.104" aria-label="1ウォンあたりの円レート">
-      <span>円</span>
+<!-- ============================================================
+     領収書・旅行（タブ1・タブ2）
+     ============================================================ -->
+<div id="viewLedger">
+
+  <!-- KPI -->
+  <div class="kpi-grid" id="kpiGrid"></div>
+
+  <!-- Trip exchange rate -->
+  <div class="card hidden" id="rateCard">
+    <div class="rate-row">
+      <span class="rate-label">💱 為替レート</span>
+      <div class="rate-input-wrap">
+        <span>1₩ =</span>
+        <input class="rate-input" id="rateInput" type="number" inputmode="decimal" step="0.001" min="0.001" value="0.104" aria-label="1ウォンあたりの円レート">
+        <span>円</span>
+      </div>
+    </div>
+    <div class="rate-note">ウォン建ての金額はこのレートで自動的に円換算されます（初期値 0.104円＝2026年11月時点の目安）。実際のカード請求額は決済時レートにより多少異なります。</div>
+  </div>
+
+  <!-- Category summary (trip only) -->
+  <div class="card hidden" id="catCard">
+    <div class="card-title"><span>📊 カテゴリ別内訳</span><span class="count" id="catCount"></span></div>
+    <div id="catList"></div>
+    <div class="rate-note">※航空券・ホテル・交通費は2026-11-16作成の費用内訳PDF（免税返金後）。現地レシートを追加すると食費・買い物として自動で合算されます。</div>
+  </div>
+
+  <!-- Capture -->
+  <div class="card">
+    <div class="capture-zone" id="captureZone">
+      <div class="capture-icon">📷</div>
+      <div class="capture-title">領収書を撮影 / 写真から選ぶ</div>
+      <div class="capture-sub">複数枚まとめてOK。自動で文字を読み取って項目を埋めます。</div>
+      <div class="capture-btns">
+        <button class="btn-photo" id="btnCamera">📷 カメラで撮影</button>
+        <button class="btn-photo alt" id="btnLibrary">🖼️ 写真を選択</button>
+      </div>
+    </div>
+    <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
+    <input type="file" id="fileLibrary" accept="image/*" multiple hidden>
+    <div class="ocr-opts">
+      <label for="langSelect">読み取り言語
+        <select class="select-mini" id="langSelect">
+          <option value="jpn+eng">日本語＋英数字</option>
+          <option value="kor+eng">韓国語＋英数字</option>
+          <option value="eng">英数字のみ</option>
+        </select>
+      </label>
+      <button class="link-btn" id="btnManual">✍️ 手入力で追加</button>
     </div>
   </div>
-  <div class="rate-note">ウォン建ての金額はこのレートで自動的に円換算されます（初期値 0.104円＝2026年11月時点の目安）。実際のカード請求額は決済時レートにより多少異なります。</div>
-</div>
 
-<!-- Category summary (trip only) -->
-<div class="card hidden" id="catCard">
-  <div class="card-title"><span>📊 カテゴリ別内訳</span><span class="count" id="catCount"></span></div>
-  <div id="catList"></div>
-  <div class="rate-note">※航空券・ホテル・交通費は2026-11-16作成の費用内訳PDF（免税返金後）。現地レシートを追加すると食費・買い物として自動で合算されます。</div>
-</div>
+  <!-- Drafts (OCR / manual entry in progress) -->
+  <div id="drafts"></div>
 
-<!-- Capture -->
-<div class="card">
-  <div class="capture-zone" id="captureZone">
-    <div class="capture-icon">📷</div>
-    <div class="capture-title">領収書を撮影 / 写真から選ぶ</div>
-    <div class="capture-sub">複数枚まとめてOK。自動で文字を読み取って項目を埋めます。</div>
-    <div class="capture-btns">
-      <button class="btn-photo" id="btnCamera">📷 カメラで撮影</button>
-      <button class="btn-photo alt" id="btnLibrary">🖼️ 写真を選択</button>
+  <!-- Entries -->
+  <div class="card">
+    <div class="card-title">
+      <span id="listTitle">登録済みの領収書</span>
+      <span class="count" id="listCount">0件</span>
+    </div>
+    <div id="entries"></div>
+    <div id="listFooter" class="hidden" style="margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
+      <button class="mini-btn" id="btnRestore">↩️ 初期データに戻す</button>
+      <button class="mini-btn" id="btnClear" style="color:#dc2626; border-color:#fecaca;">🗑️ 全消去</button>
     </div>
   </div>
-  <input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
-  <input type="file" id="fileLibrary" accept="image/*" multiple hidden>
-  <div class="ocr-opts">
-    <label for="langSelect">読み取り言語
-      <select class="select-mini" id="langSelect">
-        <option value="jpn+eng">日本語＋英数字</option>
-        <option value="kor+eng">韓国語＋英数字</option>
-        <option value="eng">英数字のみ</option>
+
+  <!-- Export -->
+  <div class="card" id="exportCard">
+    <div class="card-title"><span id="exportTitle">📥 Excel出力</span></div>
+    <button class="btn-primary" id="btnExport">📥 Excel（.xlsx）を出力</button>
+    <div class="export-row">
+      <button class="btn-ghost" id="btnDownload">💾 端末にダウンロード</button>
+      <button class="btn-ghost" id="btnTsv">📋 コピー（TSV）</button>
+    </div>
+    <div class="export-note" id="exportNote">
+      シート「領収書明細」＋「科目別集計」＋「税務チェック」＋「確定申告サマリー」。金額はSUM数式入りで、そのまま計算・並べ替えできます。
+    </div>
+  </div>
+
+</div><!-- /viewLedger -->
+
+<!-- ============================================================
+     タブ3：税務リスク診断
+     ============================================================ -->
+<div id="viewRisk" class="hidden">
+
+  <div class="card">
+    <div class="card-title"><span>🧮 この年度の前提</span><span class="count" id="riskYearLabel"></span></div>
+    <label class="field"><span>年間の事業売上（収入金額・税込）</span>
+      <input class="input" id="salesInput" type="number" inputmode="numeric" min="0" step="1" placeholder="0" enterkeyhint="done">
+    </label>
+    <label class="field"><span>青色申告特別控除</span>
+      <select class="input" id="blueSelect">
+        <option value="650000">65万円（e-Tax送信＋電子帳簿保存など）</option>
+        <option value="550000">55万円（e-Tax送信）</option>
+        <option value="100000">10万円（紙で提出）</option>
+        <option value="0">0円（適用しない）</option>
       </select>
     </label>
-    <button class="link-btn" id="btnManual">✍️ 手入力で追加</button>
+    <div class="rate-note">売上は売上帳や入金履歴の年間合計を入れてください。控除は65万円の要件（e-Tax＋電子帳簿保存）を満たさない場合、55万円か10万円に切り替えると計算が現実に合います。</div>
   </div>
-</div>
 
-<!-- Drafts (OCR / manual entry in progress) -->
-<div id="drafts"></div>
+  <div class="card">
+    <div class="card-title"><span>📥 仕訳データを読み込む</span><span class="count" id="importCount"></span></div>
+    <button class="btn-ghost wide" id="btnImport">📄 CSV / Excel（.xlsx）を選ぶ</button>
+    <input type="file" id="fileImport" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+    <div id="importPreview"></div>
+    <div class="rate-note" id="importNote">
+      スプレッドシートや会計ソフトの書き出し（CSV・Excel）を取り込めます。日付・金額・支払先・勘定科目の列は自動で見つけます。取り込んだ行もこの端末の中だけで処理され、外部には送信されません。
+    </div>
+  </div>
 
-<!-- Entries -->
-<div class="card">
-  <div class="card-title">
-    <span id="listTitle">登録済みの領収書</span>
-    <span class="count" id="listCount">0件</span>
+  <div class="card">
+    <div class="card-title"><span>🚨 税務リスク診断</span><span class="count" id="riskCount"></span></div>
+    <div id="riskSummary"></div>
+    <div id="riskList"></div>
+    <div class="rate-note">判定は「税務調査で指摘されやすい型」に当てはめた目安です。最終的な可否は税務署や税理士にご確認ください。</div>
   </div>
-  <div id="entries"></div>
-  <div id="listFooter" class="hidden" style="margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
-    <button class="mini-btn" id="btnRestore">↩️ 初期データに戻す</button>
-    <button class="mini-btn" id="btnClear" style="color:#dc2626; border-color:#fecaca;">🗑️ 全消去</button>
-  </div>
-</div>
 
-<!-- Export -->
-<div class="card" id="exportCard">
-  <div class="card-title"><span id="exportTitle">📥 Excel出力</span></div>
-  <button class="btn-primary" id="btnExport">📥 Excel（.xlsx）を出力</button>
-  <div class="export-row">
-    <button class="btn-ghost" id="btnDownload">💾 端末にダウンロード</button>
-    <button class="btn-ghost" id="btnTsv">📋 コピー（TSV）</button>
+  <div class="card">
+    <div class="card-title"><span>🧾 源泉徴収票</span><span class="count" id="slipCount"></span></div>
+    <div id="slipList"></div>
+    <button class="btn-ghost wide" id="btnAddSlip">＋ 源泉徴収票を追加（前職分など）</button>
+    <label class="field" style="margin-top:12px"><span>所得控除の額の合計（確定申告書に入れる額）</span>
+      <input class="input" id="deductionsInput" type="number" inputmode="numeric" min="0" step="1" placeholder="源泉徴収票③から自動" enterkeyhint="done">
+    </label>
+    <div class="rate-note">通常は源泉徴収票③の金額をそのまま使えます。前職分を足すときは、社会保険料控除などを二重に数えないよう、合算後の金額を自分で入れてください。</div>
   </div>
-  <div class="export-note" id="exportNote">
-    シート「領収書明細」＋「科目別集計」。金額はSUM数式入りで、そのまま計算・並べ替えできます。
-  </div>
-</div>
 
-<div class="sticky-bar">
+  <div class="card" id="simCard">
+    <div class="card-title"><span>💰 損益通算・還付シミュレーション</span></div>
+    <div id="simResult"></div>
+  </div>
+
+</div><!-- /viewRisk -->
+
+<!-- ============================================================
+     タブ4：e-Taxガイド
+     ============================================================ -->
+<div id="viewGuide" class="hidden">
+
+  <div class="card">
+    <div class="card-title"><span>🗓️ この年度の申告スケジュール</span></div>
+    <div id="deadlineBox"></div>
+  </div>
+
+  <div id="guideSteps"></div>
+
+  <div class="card">
+    <div class="card-title"><span>🖊️ 今あなたの数字はどこへ打つか</span><span class="count" id="boardCount"></span></div>
+    <div class="rate-note" style="margin-top:0; margin-bottom:10px;">左がe-Taxの画面と項目名、右がこのアプリで集計した金額です。コピーを押すと数字だけがコピーされるので、そのまま金額欄に貼り付けられます。</div>
+    <div id="board"></div>
+    <div class="export-row">
+      <button class="btn-ghost" id="btnBoardTsv">📋 全部コピー（TSV）</button>
+      <button class="btn-ghost" id="btnBoardPrint">🖨️ 印刷する</button>
+    </div>
+    <div class="rate-note">e-Taxの画面は「確定申告書等作成コーナー」の令和8年分以降の構成です。年度によって文言が少し変わることがあります。</div>
+  </div>
+
+</div><!-- /viewGuide -->
+
+<div class="sticky-bar" id="stickyBar">
   <div class="sticky-total">
     <div class="lbl" id="stickyLabel">合計金額（税込）</div>
     <div class="val" id="stickyValue">¥0</div>
