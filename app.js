@@ -1296,7 +1296,10 @@
     var sales = salesOf(y);
     var tot = totalsForYear(y);
     var blue = blueOf(y);
-    var biz = sales - tot.expenses - tot.dokujuu - blue;
+    var beforeBlue = sales - tot.expenses - tot.dokujuu;
+    /* 青色申告特別控除は所得金額を限度とする（控除で赤字は作れない） */
+    var blueApplied = Math.max(0, Math.min(blue, beforeBlue));
+    var biz = beforeBlue - blueApplied;
 
     var slips = activeSlips(slipsOf(y));
     var pay = 0, afterSum = 0, wh = 0;
@@ -1326,7 +1329,7 @@
 
     return {
       year: y, sales: sales, expenses: tot.expenses, dokujuu: tot.dokujuu,
-      count: tot.count, blue: blue, biz: biz,
+      count: tot.count, blue: blue, blueApplied: blueApplied, beforeBlue: beforeBlue, biz: biz,
       slipCount: slips.length, pay: pay, afterSum: afterSum, withheld: wh,
       salary: salary, totalIncome: totalIncome, deductions: ded, deductionsAuto: auto,
       deductionsManual: !(man === null || man === undefined || man === ''),
@@ -1590,19 +1593,20 @@
     if (!box) return;
 
     var rows = [];
+    function neg(v) { return v ? '−' + yen(v) : '¥0'; }
     rows.push(['事業売上（収入）', yenSigned(sim.sales), '']);
-    rows.push(['必要経費' + (sim.dokujuu ? '（専従者給与別）' : ''), '−' + yen(sim.expenses), '']);
-    if (sim.dokujuu) rows.push(['専従者給与', '−' + yen(sim.dokujuu), '']);
-    rows.push(['青色申告特別控除', '−' + yen(sim.blue), 'blue']);
+    rows.push(['必要経費' + (sim.dokujuu ? '（専従者給与別）' : ''), neg(sim.expenses), '']);
+    if (sim.dokujuu) rows.push(['専従者給与', neg(sim.dokujuu), '']);
+    rows.push(['青色申告特別控除', neg(sim.blueApplied) + (sim.blueApplied < sim.blue ? '（所得が少ないため減額）' : ''), 'blue']);
     rows.push(['＝ 事業所得', yenSigned(sim.biz), sim.biz < 0 ? 'neg' : '']);
     if (sim.slipCount) rows.push(['＋ 給与所得', yenSigned(sim.salary), '']);
     rows.push(['＝ 合計所得金額', yenSigned(sim.totalIncome), '']);
-    rows.push(['− 所得控除の額の合計', '−' + yen(sim.deductions) + (sim.deductionsManual ? '（手入力）' : '（源泉徴収票③）'), '']);
+    rows.push(['− 所得控除の額の合計', neg(sim.deductions) + (sim.deductionsManual ? '（手入力）' : '（源泉徴収票③）'), '']);
     rows.push(['＝ 課税される所得金額', yenSigned(sim.taxable), 'blue']);
     rows.push(['所得税', yen(sim.incomeTax), '']);
     rows.push(['復興特別所得税（2.1%）', yen(sim.fukko), '']);
     rows.push(['所得税及び復興特別所得税', yen(sim.totalTax), '']);
-    if (sim.slipCount) rows.push(['− 源泉徴収税額（前払い済み）', '−' + yen(sim.withheld), '']);
+    if (sim.slipCount) rows.push(['− 源泉徴収税額（前払い済み）', neg(sim.withheld), '']);
 
     var html = '<div>';
     rows.forEach(function (r, i) {
@@ -1719,10 +1723,16 @@
   }
 
   function readImportFile(file) {
+    var isCsv = /\.csv$/i.test(file.name) || /csv/i.test(file.type || '');
     var reader = new FileReader();
     reader.onload = function (ev) {
       try {
-        var wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: false });
+        var wb;
+        if (isCsv) {
+          wb = XLSX.read(decodeCsvText(ev.target.result), { type: 'string' });
+        } else {
+          wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array', cellDates: false });
+        }
         var name = wb.SheetNames[0];
         var ws = wb.Sheets[name];
         var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
@@ -1733,6 +1743,18 @@
     };
     reader.onerror = function () { toast('ファイルを読めませんでした', true); };
     reader.readAsArrayBuffer(file);
+  }
+
+  /* CSVはUTF-8/Shift_JISの両方を扱う（文字化けで見出しが読めなくなるのを防ぐ） */
+  function decodeCsvText(buf) {
+    var bytes = new Uint8Array(buf);
+    if (bytes.length > 2 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+      return new TextDecoder('utf-8').decode(bytes.subarray(3));
+    }
+    var text = '';
+    try { text = new TextDecoder('utf-8', { fatal: false }).decode(bytes); } catch (e) { text = ''; }
+    if (text.indexOf('\uFFFD') < 0) return text;
+    try { return new TextDecoder('shift_jis').decode(bytes); } catch (e2) { return text; }
   }
 
   function applyImport(rows, filename) {
@@ -1985,8 +2007,8 @@
     });
     sec1.push({ label: '経費計', src: '経費の合計（専従者給与を除く）', v: sim.expenses, total: true });
     if (sim.dokujuu) sec1.push({ label: '専従者給与（事業専従者控除）', src: '経費計の下の別欄', v: sim.dokujuu });
-    sec1.push({ label: '青色申告特別控除前の所得金額', src: '自動計算（売上−経費−専従者給与）', v: sim.sales - sim.expenses - sim.dokujuu });
-    sec1.push({ label: '青色申告特別控除額', src: '選択中の控除額（65万／55万／10万）', v: sim.blue });
+    sec1.push({ label: '青色申告特別控除前の所得金額', src: '自動計算（売上−経費−専従者給与）', v: sim.beforeBlue });
+    sec1.push({ label: '青色申告特別控除額', src: '選択中の控除額（65万／55万／10万）' + (sim.blueApplied < sim.blue ? '／所得を限度に減額' : ''), v: sim.blueApplied });
     sec1.push({ label: '所得金額', src: '自動計算。赤字ならマイナスのまま', v: sim.biz, total: true });
 
     var sec2 = [];
@@ -2094,7 +2116,8 @@
     rows4.push(['事業売上（収入）', sim.sales, '']);
     rows4.push(['必要経費', sim.expenses, '']);
     if (sim.dokujuu) rows4.push(['専従者給与', sim.dokujuu, '']);
-    rows4.push(['青色申告特別控除', sim.blue, '']);
+    rows4.push(['青色申告特別控除前の所得金額', sim.beforeBlue, '']);
+    rows4.push(['青色申告特別控除', sim.blueApplied, sim.blueApplied < sim.blue ? '所得を限度に減額' : '']);
     rows4.push(['事業所得', sim.biz, sim.biz < 0 ? '赤字（給与所得と損益通算）' : '']);
     rows4.push(['給与所得（源泉徴収票②）', sim.salary, sim.slipCount + '枚']);
     rows4.push(['合計所得金額', sim.totalIncome, '']);
@@ -2273,7 +2296,7 @@
     });
     lines.push('経費計\t' + sim.expenses);
     if (sim.dokujuu) lines.push('専従者給与\t' + sim.dokujuu);
-    lines.push('青色申告特別控除額\t' + sim.blue);
+    lines.push('青色申告特別控除額\t' + sim.blueApplied);
     lines.push('所得金額（事業所得）\t' + sim.biz);
     lines.push('給与所得\t' + sim.salary);
     lines.push('合計所得金額\t' + sim.totalIncome);
