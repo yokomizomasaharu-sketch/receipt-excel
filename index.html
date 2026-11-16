@@ -84,7 +84,7 @@
   }
   .year-bar .year-ico { font-size: 14px; flex: none; }
   .year-select { flex: 1; min-width: 0; font-weight: 700; }
-  .year-bar .mini-btn { min-height: 34px; padding: 5px 11px; flex: none; }
+  .year-bar .mini-btn { min-height: 34px; padding: 5px 11px; flex: none; white-space: nowrap; }
 
   /* ---------- Cards ---------- */
   .card {
@@ -356,8 +356,8 @@
   .step > summary::-webkit-details-marker { display: none; }
   .step-ico { font-size: 17px; flex: none; width: 22px; text-align: center; }
   .step-main { flex: 1; min-width: 0; }
-  .step-title { font-size: 13px; font-weight: 700; line-height: 1.3; }
-  .step-sub { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; line-height: 1.35; }
+  .step-title { display: block; font-size: 13px; font-weight: 700; line-height: 1.3; }
+  .step-sub { display: block; font-size: 10.5px; color: var(--ink-3); margin-top: 2px; line-height: 1.35; }
   .chk {
     flex: none; width: 27px; height: 27px; border-radius: 50%; border: 1.5px solid #cbd5e1;
     background: #fff; color: #fff; font-size: 13px; font-weight: 700; cursor: pointer;
@@ -596,6 +596,6 @@
 
 <script src="./vendor/xlsx.full.min.js"></script>
 <script src="./vendor/tesseract.min.js"></script>
-<script src="./app.js?v=2026-11-17b"></script>
+<script src="./app.js?v=2026-11-17c"></script>
 </body>
 </html>
