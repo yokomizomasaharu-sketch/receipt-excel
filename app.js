@@ -2110,7 +2110,7 @@
     rows.push(['＝ 事業所得', yenSigned(sim.biz), sim.biz < 0 ? 'neg' : '']);
     if (sim.slipCount) rows.push(['＋ 給与所得（' + sim.slipCount + '枚の合算）', yenSigned(sim.salary), '']);
     rows.push(['＝ 合計所得金額', yenSigned(sim.totalIncome), '']);
-    rows.push(['− 所得控除の内訳', '', '']);
+    rows.push(['所得控除の内訳（以下を合計）', '', '']);
 
     var detail = [
       ['　社会保険料控除', b.social],
