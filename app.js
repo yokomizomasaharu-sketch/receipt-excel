@@ -2129,18 +2129,18 @@
       if (!r2[1]) return;
       rows.push([r2[0], '−' + yen(r2[1]), '']);
     });
-    rows.push(['− 所得控除の額の合計', neg(sim.ded), '']);
+    rows.push(['所得控除の額の合計', neg(sim.ded), '']);
     rows.push(['＝ 課税される所得金額', yenSigned(sim.taxable), 'blue']);
     if (sim.housing) {
       rows.push(['所得税（累進税率）', yen(sim.incomeTaxBase), '']);
-      rows.push(['− 住宅借入金等特別控除（税額控除）', neg(sim.housing), '']);
+      rows.push(['住宅借入金等特別控除（税額控除）', neg(sim.housing), '']);
       rows.push(['所得税（控除後）', yen(sim.incomeTax), '']);
     } else {
       rows.push(['所得税（累進税率）', yen(sim.incomeTax), '']);
     }
     rows.push(['復興特別所得税（2.1%）', yen(sim.fukko), '']);
     rows.push(['所得税及び復興特別所得税', yen(sim.totalTax), '']);
-    if (sim.slipCount) rows.push(['− 源泉徴収税額（前払い済み）', neg(sim.withheld), '']);
+    if (sim.slipCount) rows.push(['源泉徴収税額（前払い済み）', neg(sim.withheld), '']);
 
     var html = '<div>';
     rows.forEach(function (r, i) {
