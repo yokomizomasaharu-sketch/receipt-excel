@@ -45,8 +45,9 @@
     ledgers: {},     /* { '2026': [entry] } */
     sales: {},       /* { '2026': 41683 } */
     blue: {},        /* { '2026': 650000 } */
-    slips: {},       /* { '2026': [slip] } */
-    deductions: {},  /* { '2026': 123456 } ※未設定なら源泉徴収票③から自動 */
+    slips: {},       /* { '2026': [slip] } 複数枚OK */
+    ded: {},         /* { '2026': { socialExtra, ideco, lifeGenNew, ... } } 所得控除の詳細 */
+    deductions: {},  /* 旧：所得控除合計の手入力（v3以前。現在は使わない） */
     checks: {},      /* { '2026': { prep: true } } */
     presetApplied: false,
     drafts: []
@@ -82,6 +83,7 @@
           if (d.blue && typeof d.blue === 'object') state.blue = d.blue;
           if (d.slips && typeof d.slips === 'object') state.slips = d.slips;
           if (d.deductions && typeof d.deductions === 'object') state.deductions = d.deductions;
+          if (d.ded && typeof d.ded === 'object') state.ded = d.ded;
           if (d.checks && typeof d.checks === 'object') state.checks = d.checks;
           state.presetApplied = !!d.presetApplied;
           if (d.mode === 'tax' || d.mode === 'trip' || d.mode === 'risk' || d.mode === 'guide') state.mode = d.mode;
@@ -113,7 +115,7 @@
     var payload = {
       v: 3, mode: state.mode, year: state.year, rate: state.rate, trip: state.trip,
       ledgers: state.ledgers, sales: state.sales, blue: state.blue,
-      slips: state.slips, deductions: state.deductions, checks: state.checks,
+      slips: state.slips, ded: state.ded, checks: state.checks,
       presetApplied: state.presetApplied
     };
     try {
@@ -156,6 +158,13 @@
     var k = ykey(y);
     if (!state.checks[k] || typeof state.checks[k] !== 'object') state.checks[k] = {};
     return state.checks[k];
+  }
+
+  /* 所得控除の詳細（年度ごと）。数値はすべて「支払額」か「控除額」で入る */
+  function dedOf(y) {
+    var k = ykey(y);
+    if (!state.ded[k] || typeof state.ded[k] !== 'object') state.ded[k] = {};
+    return state.ded[k];
   }
 
   /* ---------- ユーティリティ ---------- */
@@ -252,7 +261,7 @@
     var lo = Math.min(2024, now - 1);
     var hi = Math.max(2030, now + 6);
     for (var y = lo; y <= hi; y += 1) set[y] = 1;
-    [state.ledgers, state.sales, state.blue, state.slips, state.deductions, state.checks].forEach(function (m) {
+    [state.ledgers, state.sales, state.blue, state.slips, state.ded, state.checks].forEach(function (m) {
       Object.keys(m || {}).forEach(function (k) { if (/^\d{4}$/.test(k)) set[+k] = 1; });
     });
     set[state.year] = 1;
@@ -1249,14 +1258,140 @@
     return { expenses: expenses, dokujuu: dokujuu, byForm: byForm, byRaw: byRaw, rawCount: rawCount, count: cnt };
   }
 
-  function salaryDeduction(pay) {
+  /* ---------- 税制（年度別） ---------- */
+  /* 給与所得控除
+     - 令和8年分・令和9年分：最低保障額74万円　（令和8年度税制改正。国税庁 No.1410「令和8年分・令和9年分」）
+     - 令和7年分：最低保障額65万円
+     - 令和6年分以前：最低保障額55万円 */
+  function salaryDedMin(y) {
+    if (y >= 2026) return 740000;
+    if (y >= 2025) return 650000;
+    return 550000;
+  }
+  function salaryDeduction(pay, y) {
+    pay = Math.max(0, Number(pay) || 0);
     if (!pay) return 0;
+    if (y === undefined || y === null) y = state.year;
+    if (y >= 2026) {
+      /* 収入69万1,000円〜220万円未満の特例（給与所得＝収入−74万円、74万1,000円未満は給与所得なし） */
+      if (pay < 741000) return pay;
+      if (pay < 2200000) return 740000;
+      if (pay <= 3600000) return Math.floor(pay * 0.3) + 80000;
+      if (pay <= 6600000) return Math.floor(pay * 0.2) + 440000;
+      if (pay <= 8500000) return Math.floor(pay * 0.1) + 1100000;
+      return 1950000;
+    }
+    if (y >= 2025) {
+      if (pay <= 1900000) return 650000;
+      if (pay <= 3600000) return Math.floor(pay * 0.3) + 80000;
+      if (pay <= 6600000) return Math.floor(pay * 0.2) + 440000;
+      if (pay <= 8500000) return Math.floor(pay * 0.1) + 1100000;
+      return 1950000;
+    }
     if (pay <= 1625000) return 550000;
     if (pay <= 1800000) return Math.floor(pay * 0.4) - 100000;
     if (pay <= 3600000) return Math.floor(pay * 0.3) + 80000;
     if (pay <= 6600000) return Math.floor(pay * 0.2) + 440000;
     if (pay <= 8500000) return Math.floor(pay * 0.1) + 1100000;
     return 1950000;
+  }
+
+  /* 源泉徴収票1枚分の「給与所得」：②が手入力されていればそれを、無ければ①から自動計算 */
+  function salaryIncomeOf(slip, y) {
+    var pay = num(slip && slip.payment);
+    if (!pay) return 0;
+    if (slip && slip.afterManual) return Math.max(0, num(slip.after));
+    return Math.max(0, pay - salaryDeduction(pay, y));
+  }
+  function salaryAfterAuto(slip, y) {
+    var pay = num(slip && slip.payment);
+    if (!pay) return 0;
+    return Math.max(0, pay - salaryDeduction(pay, y));
+  }
+
+  /* 基礎控除（合計所得金額で決まる。国税庁 No.1199 の年度別表）
+     - 令和8年分・令和9年分：合計所得489万円以下104万円／655万円以下67万円／2,350万円以下62万円
+     - 令和7年分：132万円以下95万円／336万円以下88万円／489万円以下68万円／655万円以下63万円／2,350万円以下58万円
+     - 令和6年分以前：2,400万円以下48万円 */
+  function basicDeductionFor(y, income) {
+    var inc = Math.max(0, Number(income) || 0);
+    if (y >= 2028) {
+      if (inc <= 1320000) return 990000;
+      if (inc <= 23500000) return 620000;
+      if (inc <= 24000000) return 480000;
+      if (inc <= 24500000) return 320000;
+      if (inc <= 25000000) return 160000;
+      return 0;
+    }
+    if (y >= 2026) {
+      if (inc <= 4890000) return 1040000;
+      if (inc <= 6550000) return 670000;
+      if (inc <= 23500000) return 620000;
+      if (inc <= 24000000) return 480000;
+      if (inc <= 24500000) return 320000;
+      if (inc <= 25000000) return 160000;
+      return 0;
+    }
+    if (y >= 2025) {
+      if (inc <= 1320000) return 950000;
+      if (inc <= 3360000) return 880000;
+      if (inc <= 4890000) return 680000;
+      if (inc <= 6550000) return 630000;
+      if (inc <= 23500000) return 580000;
+      if (inc <= 24000000) return 480000;
+      if (inc <= 24500000) return 320000;
+      if (inc <= 25000000) return 160000;
+      return 0;
+    }
+    if (inc <= 24000000) return 480000;
+    if (inc <= 24500000) return 320000;
+    if (inc <= 25000000) return 160000;
+    return 0;
+  }
+  function basicBandLabel(y, income) {
+    var inc = Math.max(0, Number(income) || 0);
+    if (inc > 25000000) return '合計所得2,500万円超（控除なし）';
+    if (inc > 24500000) return '合計所得2,450万円超2,500万円以下';
+    if (inc > 24000000) return '合計所得2,400万円超2,450万円以下';
+    if (y >= 2028) return inc <= 1320000 ? '合計所得132万円以下' : '合計所得2,350万円以下';
+    if (y >= 2026) return inc <= 4890000 ? '合計所得489万円以下' : (inc <= 6550000 ? '合計所得489万円超655万円以下' : '合計所得2,350万円以下');
+    if (y >= 2025) {
+      if (inc <= 1320000) return '合計所得132万円以下';
+      if (inc <= 3360000) return '合計所得336万円以下';
+      if (inc <= 4890000) return '合計所得489万円以下';
+      if (inc <= 6550000) return '合計所得655万円以下';
+      return '合計所得2,350万円以下';
+    }
+    return '合計所得2,400万円以下';
+  }
+
+  /* 生命保険料控除（新制度：一般・介護医療・個人年金 各4万／旧制度：各5万。新旧合計の上限12万円） */
+  function lifeCalcNew(p) {
+    p = Math.max(0, Number(p) || 0);
+    if (p <= 20000) return p;
+    if (p <= 40000) return Math.floor(p / 2) + 10000;
+    if (p <= 80000) return Math.floor(p / 4) + 20000;
+    return 40000;
+  }
+  function lifeCalcOld(p) {
+    p = Math.max(0, Number(p) || 0);
+    if (p <= 25000) return p;
+    if (p <= 50000) return Math.floor(p / 2) + 12500;
+    if (p <= 100000) return Math.floor(p / 4) + 25000;
+    return 50000;
+  }
+  function lifeDeduction(d) {
+    var newSum = Math.min(120000, lifeCalcNew(d.lifeGenNew) + lifeCalcNew(d.lifeCare) + lifeCalcNew(d.lifePenNew));
+    var oldSum = Math.min(100000, lifeCalcOld(d.lifeGenOld) + lifeCalcOld(d.lifePenOld));
+    return Math.min(120000, newSum + oldSum);
+  }
+
+  /* 地震保険料控除（地震保険料は5万円まで、旧長期損害保険料は最大1万円、合わせて5万円まで） */
+  function quakeDeduction(d) {
+    var a = Math.min(50000, Math.max(0, num(d.quake)));
+    var p = Math.max(0, num(d.quakeOld));
+    var b = p <= 0 ? 0 : (p <= 5000 ? p : (p <= 15000 ? Math.floor(p / 2) + 2500 : 10000));
+    return Math.min(50000, a + b);
   }
 
   var TAX_BRACKETS = [
@@ -1278,17 +1413,59 @@
     return 0;
   }
 
-  function slipsAutoDeduction(slips) {
-    var v = 0;
-    slips.forEach(function (s) { v = Math.max(v, num(s.deductions)); });
-    return v;
-  }
-
   /* 未入力の空欄の源泉徴収票は計算に入れない */
   function activeSlips(slips) {
     return slips.filter(function (s) {
-      return num(s.payment) || num(s.afterDeduction) || num(s.deductions) || num(s.taxWithheld);
+      return num(s.payment) || num(s.after) || num(s.deductions) || num(s.taxWithheld) || num(s.social);
     });
+  }
+
+  /* 所得控除の内訳をまとめて計算する（源泉徴収票の社会保険料も合算） */
+  function deductionBreakdown(totalIncome) {
+    var y = state.year;
+    var d = dedOf(y);
+    var slips = activeSlips(slipsOf(y));
+    var socialSlip = 0, dedSlip = 0;
+    slips.forEach(function (s) { socialSlip += num(s.social); dedSlip += num(s.deductions); });
+
+    var social = socialSlip + num(d.socialExtra);
+    var ideco = num(d.ideco);
+    var life = d.lifeMode === 'manual' ? num(d.lifeManual) : lifeDeduction(d);
+    var quake = d.quakeMode === 'manual' ? num(d.quakeManual) : quakeDeduction(d);
+
+    var medPaid = num(d.medPaid), medReimb = num(d.medReimb);
+    var medFloor = Math.min(100000, Math.floor(Math.max(0, totalIncome) * 0.05));
+    var medical = Math.max(0, Math.min(2000000, medPaid - medReimb - medFloor));
+
+    var donPaid = num(d.donation);
+    var donCap = Math.max(0, Math.floor(Math.max(0, totalIncome) * 0.4));
+    var donation = donPaid > 0 ? Math.max(0, Math.min(donPaid, donCap) - 2000) : 0;
+
+    var spouse = num(d.spouse);
+    var depGeneral = num(d.depGeneral) * 380000;
+    var depSpecific = num(d.depSpecific) * 630000;
+    var depElder = num(d.depElder) * 480000;
+    var dependents = depGeneral + depSpecific + depElder;
+    var disability = num(d.disability);
+    var singleParent = num(d.singleParent);
+
+    var basicAuto = basicDeductionFor(y, totalIncome);
+    var basicSet = !(d.basicManual === undefined || d.basicManual === null || d.basicManual === '');
+    var basic = basicSet ? num(d.basicManual) : basicAuto;
+    var other = num(d.other);
+
+    var total = social + ideco + life + quake + medical + donation + spouse + dependents + disability + singleParent + basic + other;
+
+    return {
+      d: d, slips: slips, socialSlip: socialSlip, dedSlip: dedSlip,
+      social: social, ideco: ideco, life: life, quake: quake,
+      medPaid: medPaid, medReimb: medReimb, medFloor: medFloor, medical: medical,
+      donPaid: donPaid, donCap: donCap, donation: donation,
+      spouse: spouse, depGeneral: depGeneral, depSpecific: depSpecific, depElder: depElder,
+      dependents: dependents, disability: disability, singleParent: singleParent,
+      basic: basic, basicAuto: basicAuto, basicSet: basicSet, other: other,
+      total: total
+    };
   }
 
   function computeSim() {
@@ -1301,41 +1478,72 @@
     var blueApplied = Math.max(0, Math.min(blue, beforeBlue));
     var biz = beforeBlue - blueApplied;
 
-    var slips = activeSlips(slipsOf(y));
-    var pay = 0, afterSum = 0, wh = 0;
+    var bp = deductionBreakdown(0); /* 所得が決まる前の暫定（医療費の足切りなどに使う） */
+    var slips = bp.slips;
+    var pay = 0, salary = 0, wh = 0;
     slips.forEach(function (s) {
       pay += num(s.payment);
-      afterSum += num(s.afterDeduction);
+      salary += salaryIncomeOf(s, y);
       wh += num(s.taxWithheld);
     });
 
-    var salary;
-    if (!slips.length) salary = 0;
-    else if (slips.length === 1 && num(slips[0].afterDeduction) > 0) salary = num(slips[0].afterDeduction);
-    else salary = Math.max(0, pay - salaryDeduction(pay));
-
     var totalIncome = salary + biz;
-
-    var man = state.deductions[ykey(y)];
-    var auto = slipsAutoDeduction(slips);
-    var ded = (man === null || man === undefined || man === '') ? auto : Number(man);
+    var b = deductionBreakdown(totalIncome);
+    var ded = b.total;
 
     var taxableRaw = totalIncome - ded;
     var taxable = taxableRaw > 0 ? Math.floor(taxableRaw / 1000) * 1000 : 0;
-    var incomeTax = incomeTaxOf(taxable);
+    var incomeTaxBase = incomeTaxOf(taxable);
+    var housingWant = Math.max(0, num(b.d.housing));
+    var housing = Math.min(housingWant, incomeTaxBase);
+    var incomeTax = incomeTaxBase - housing;
     var fukko = y <= 2037 ? Math.floor(incomeTax * 0.021) : 0;
     var totalTax = incomeTax + fukko;
     var diff = totalTax - wh;
 
+    /* 住民税（概算）：所得控除は所得税と同じだが基礎控除は43万円。所得割10% − 調整控除 − 住宅ローン控除の住民税分＋均等割 */
+    var residentBasic = y >= 2026 ? 450000 : 430000;
+    var residentDed = Math.max(0, ded - b.basic + Math.min(b.basic, residentBasic));
+    var residentTaxable = Math.max(0, Math.floor((totalIncome - residentDed) / 1000) * 1000);
+    var residentIncomePart = Math.max(0, Math.floor(residentTaxable * 0.10 / 100) * 100 - (residentTaxable > 0 ? 2500 : 0));
+    var residentHousing = Math.min(136500, Math.max(0, housingWant - housing));
+    var residentTax = Math.max(0, residentIncomePart - residentHousing) + (totalIncome > 0 ? 5000 : 0);
+
+    var warnings = [];
+    function warn(level, text) { warnings.push({ level: level, text: text }); }
+    var dd = b.d;
+    if (dd.lifeMode === 'manual' && num(dd.lifeManual) > 120000) warn('warn', '生命保険料控除が上限12万円を超えています。控除証明書の金額に直してください。');
+    if (dd.quakeMode === 'manual' && num(dd.quakeManual) > 50000) warn('warn', '地震保険料控除が上限5万円を超えています。');
+    if (num(dd.medPaid) > 0 && b.medical === 0) warn('info', '医療費の支払額が足切り額（10万円と総所得の5%の少ない方＝' + yen(b.medFloor) + '）以下のため、医療費控除は0円です。');
+    if (b.donPaid > 0 && b.donPaid > b.donCap) warn('warn', '寄附金控除の対象は総所得金額等の40%（' + yen(b.donCap) + '）までです。超えた分は控除されません。');
+    if (ded > totalIncome && totalIncome > 0) warn('warn', '所得控除の合計が所得を上回っています。控除しきれない分は翌年に繰り越せません（雑損控除を除く）。');
+    slips.forEach(function (s, i) {
+      if (num(s.payment) > 0 && num(s.social) > num(s.payment)) warn('warn', '源泉徴収票' + (i + 1) + '：社会保険料が支払金額を超えています。入力位置を確認してください。');
+      if (s.afterManual && num(s.after) > num(s.payment)) warn('warn', '源泉徴収票' + (i + 1) + '：給与所得控除後の金額が支払金額より大きくなっています。');
+    });
+    if (slips.length > 1) warn('info', '源泉徴収票が' + slips.length + '枚あります。給与が2か所以上なら、年末調整済みでも確定申告が必要です（副業がばれる・ばれないの問題ではなく、法定です）。');
+    if (b.dedSlip > 0 && Math.abs(b.dedSlip - ded) > 100000) {
+      warn('info', '源泉徴収票③の所得控除合計（' + yen(b.dedSlip) + '）と、この画面の控除合計（' + yen(ded) + '）が' + yen(Math.abs(b.dedSlip - ded)) + '違います。事業の青色申告特別控除・医療費・ふるさと納税などを入れている場合は正常です。');
+    }
+    if (b.basicSet && Math.abs(b.basic - b.basicAuto) > 1000) {
+      warn('info', '基礎控除を手入力（' + yen(b.basic) + '）で上書きしています。' + y + '年分の自動計算は' + yen(b.basicAuto) + 'です。');
+    }
+    if (housingWant > incomeTaxBase) warn('info', '住宅ローン控除が所得税を超えています。引ききれない分は住民税から控除されます（最大13万6,500円）。');
+    if (num(dd.housing) > 0) warn('info', '住宅ローン控除は税額控除です。所得控除の合計には入れず、所得税から直接引いています（この画面の計算どおり）。');
+
     return {
       year: y, sales: sales, expenses: tot.expenses, dokujuu: tot.dokujuu,
       count: tot.count, blue: blue, blueApplied: blueApplied, beforeBlue: beforeBlue, biz: biz,
-      slipCount: slips.length, pay: pay, afterSum: afterSum, withheld: wh,
-      salary: salary, totalIncome: totalIncome, deductions: ded, deductionsAuto: auto,
-      deductionsManual: !(man === null || man === undefined || man === ''),
-      taxableRaw: taxableRaw, taxable: taxable, incomeTax: incomeTax, fukko: fukko,
+      slipCount: slips.length, pay: pay, withheld: wh,
+      salary: salary, totalIncome: totalIncome,
+      ded: ded, deductions: ded, deductionsManual: false,
+      breakdown: b,
+      taxableRaw: taxableRaw, taxable: taxable,
+      incomeTaxBase: incomeTaxBase, housing: housing, housingWant: housingWant,
+      incomeTax: incomeTax, fukko: fukko,
       totalTax: totalTax, diff: diff,
-      residentTax: taxable > 0 ? Math.floor(taxable * 0.10) : 0
+      residentTaxable: residentTaxable, residentTax: residentTax,
+      warnings: warnings
     };
   }
 
@@ -1416,9 +1624,18 @@
         push('amber', e, '10万円以上の支出', '10万円以上は「消耗品費」で一括経費にできません。減価償却（10万円未満なら一括）か一括償却資産（20万円未満・3年均等）の検討が必要です。備品・工具・機材ならなおさらです。', 'capex');
       }
 
-      // 家事按分の記録なし
-      if ((cat === '通信費' || cat === '地代家賃' || cat === '水道光熱費') && !/(按分|事業|業務|仕事|事業用|事業分|％|%|割)/.test(memo)) {
-        push('amber', e, '家事按分の記録がありません', '自宅の通信費・家賃・水道光熱費は、事業で使った割合だけが経費です。メモに「按分30%」のように割合と根拠（稼働日数・面積など）を残すと説明できます。', 'apportion');
+      // 家事按分の記録なし（自宅家賃・水道光熱費の全額計上は否認されやすいので赤）
+      var APPORTION = /(按分|事業|業務|仕事|事業用|事業分|％|%|割)/;
+      if ((cat === '地代家賃' || cat === '水道光熱費') && !APPORTION.test(memo)) {
+        push('red', e, '家事按分なしで全額を経費計上', '自宅の家賃・水道光熱費は、事業で使った割合だけが経費です。全額計上は税務調査で真っ先に否認されます。メモに「按分30%（面積◯㎡／◯㎡・稼働◯日）」のように根拠を残してください。', 'apportion-red');
+      } else if (cat === '通信費' && !APPORTION.test(memo)) {
+        push('amber', e, '家事按分の記録がありません', '自宅の通信費は、事業で使った割合だけが経費です。メモに「按分30%」のように割合と根拠（稼働日数・面積など）を残すと説明できます。', 'apportion');
+      }
+
+      // 旧居の退去精算（自宅兼事務所の按分根拠が問われる）
+      if (/(旧居|退去|解約|明渡|明け渡し|原状回復|ハウスクリーニング|クリーニング代|敷金|礼金|更新料|退去精算)/.test(memoLow) &&
+          ['地代家賃', '水道光熱費', '雑費', '修繕費', '支払手数料'].indexOf(cat) >= 0) {
+        push('amber', e, '旧居の退去精算（自宅兼事務所の按分根拠）', '退去精算・原状回復・クリーニング代を経費にするなら、その住まいを事業に使っていた割合と根拠（事務所として使った面積・日数、按分率）を残してください。全額を経費にすると「私的な退去費用」と判断されます。', 'oldhome');
       }
 
       // プライベート混在
@@ -1487,6 +1704,42 @@
       });
     }
 
+    /* 給与＋赤字事業の損益通算で還付を受ける形（税務署が事業実態を確認する典型） */
+    var sim = computeSim();
+    if (sim.salary > 0 && sim.biz < 0) {
+      var ratio = sim.salary ? Math.abs(sim.biz) / sim.salary : 0;
+      if (sim.diff < 0) {
+        structural.push({
+          level: 'red',
+          title: '赤字の損益通算で還付を受ける形（' + yen(-sim.diff) + '）',
+          why: '給与所得' + yen(sim.salary) + 'に事業の赤字' + yen(Math.abs(sim.biz)) + 'をぶつけて、払いすぎた所得税の還付を受けようとしています。この形は税務署が「本当に事業か（趣味の範囲か）」を確認しに来る典型です。売上・経費の裏付（請求書・入金記録・領収書）を、日付と相手が分かる形で揃えておいてください。'
+        });
+      } else if (ratio > 0.2) {
+        structural.push({
+          level: 'amber',
+          title: '事業赤字が給与の' + Math.round(ratio * 100) + '%に達しています',
+          why: '赤字額が大きく、損益通算で課税所得をかなり下げています。毎年続くと事業実態を問われます。売上の計上漏れが無いか、私的支出が混ざっていないかを先に確認してください。'
+        });
+      }
+    }
+
+    /* 保険料控除・社会保険料の入れ忘れ（損をする側のリスク） */
+    var bd = deductionBreakdown(sim.totalIncome);
+    if (sim.slipCount && !bd.life && !bd.quake && !bd.medical) {
+      structural.push({
+        level: 'amber',
+        title: '生命保険・地震保険・医療費の控除がまだ入っていません',
+        why: '控除証明書が届いていれば、所得控除が増えて還付が増えます。入力を忘れるとあなたが損をするだけなので、書類が届いたらすぐ「所得控除の詳細」に入れてください。'
+      });
+    }
+    if (sim.slipCount && !bd.social) {
+      structural.push({
+        level: 'amber',
+        title: '社会保険料が未入力です',
+        why: '源泉徴収票の「社会保険料等の金額」を入れると、その全額が所得控除になります。入っていないと課税所得がその分高く出ます。'
+      });
+    }
+
     return {
       flags: flags, structural: structural,
       redCount: redCount, amberCount: amberCount,
@@ -1503,14 +1756,8 @@
     if (si && document.activeElement !== si) si.value = salesOf() ? String(salesOf()) : '';
     var bs = $('blueSelect');
     if (bs) bs.value = String(blueOf());
-    var di = $('deductionsInput');
-    if (di && document.activeElement !== di) {
-      var man = state.deductions[ykey()];
-      var auto = slipsAutoDeduction(slipsOf());
-      di.value = (man === null || man === undefined || man === '') ? (auto ? String(auto) : '') : String(man);
-      di.placeholder = auto ? '源泉徴収票③から自動（' + yen(auto) + '）' : '源泉徴収票③から自動';
-    }
     renderSlips();
+    renderDeductions();
     if (lastImport) {
       var ip = $('importPreview');
       if (ip) ip.innerHTML = importPreviewHTML(lastImport);
@@ -1519,30 +1766,273 @@
     }
   }
 
+  /* ---------- 源泉徴収票（複数枚） ---------- */
   function renderSlips() {
     var box = $('slipList');
     if (!box) return;
     var slips = slipsOf();
     if (!slips.length) {
-      slips.push({ id: uid(), payer: '', payment: '', afterDeduction: '', deductions: '', taxWithheld: '' });
+      slips.push({ id: uid(), payer: '', payment: '', after: '', afterManual: false, social: '', deductions: '', taxWithheld: '' });
     }
     $('slipCount').textContent = slips.length + '枚';
     box.innerHTML = slips.map(function (s, i) {
+      var autoAfter = salaryAfterAuto(s, state.year);
+      var pay = num(s.payment);
       return '<div class="slip" data-idx="' + i + '">' +
-        '<div class="slip-head"><b>源泉徴収票 ' + (i + 1) + (i === 0 ? '（年末調整済み）' : '（前職など）') + '</b>' +
+        '<div class="slip-head"><b>源泉徴収票 ' + (i + 1) + (i === 0 ? '（年末調整済み）' : '（前職・2か所目など）') + '</b>' +
         (slips.length > 1 ? '<button class="mini-btn" data-slip-del="' + i + '" style="color:#dc2626;border-color:#fecaca;min-height:28px;padding:3px 8px;">削除</button>' : '') +
         '</div>' +
         '<label class="field"><span>支払者の名称（メモ用）</span><input class="input" type="text" data-slip="payer" value="' + esc(s.payer || '') + '" placeholder="例：株式会社◯◯"></label>' +
+        '<label class="field"><span>① 支払金額（給与収入）</span><input class="input" type="number" inputmode="numeric" min="0" data-slip="payment" value="' + esc(s.payment || '') + '" placeholder="0"></label>' +
+        '<label class="field"><span>② 給与所得控除後の金額' + (s.afterManual ? '（手入力）' : '（空欄なら自動）') + '</span>' +
+          '<input class="input' + (s.afterManual ? ' edited' : '') + '" type="number" inputmode="numeric" min="0" data-slip="after" value="' + esc(s.afterManual ? (s.after || '') : '') + '" placeholder="' + (pay ? esc(String(autoAfter)) : '0') + '">' +
+        '</label>' +
+        '<div class="slip-note" data-note="' + i + '">' + slipNoteHTML(s, i) + '</div>' +
         '<div class="grid2">' +
-        '<label class="field"><span>① 支払金額</span><input class="input" type="number" inputmode="numeric" min="0" data-slip="payment" value="' + esc(s.payment || '') + '" placeholder="0"></label>' +
-        '<label class="field"><span>② 給与所得控除後の金額</span><input class="input" type="number" inputmode="numeric" min="0" data-slip="afterDeduction" value="' + esc(s.afterDeduction || '') + '" placeholder="0"></label>' +
-        '</div>' +
-        '<div class="grid2">' +
+        '<label class="field"><span>社会保険料等の金額</span><input class="input" type="number" inputmode="numeric" min="0" data-slip="social" value="' + esc(s.social || '') + '" placeholder="0"></label>' +
         '<label class="field"><span>③ 所得控除の額の合計額</span><input class="input" type="number" inputmode="numeric" min="0" data-slip="deductions" value="' + esc(s.deductions || '') + '" placeholder="0"></label>' +
-        '<label class="field"><span>④ 源泉徴収税額</span><input class="input" type="number" inputmode="numeric" min="0" data-slip="taxWithheld" value="' + esc(s.taxWithheld || '') + '" placeholder="0"></label>' +
         '</div>' +
+        '<label class="field"><span>④ 源泉徴収税額</span><input class="input" type="number" inputmode="numeric" min="0" data-slip="taxWithheld" value="' + esc(s.taxWithheld || '') + '" placeholder="0"></label>' +
+        '<div class="slip-foot">' + slipFootHTML(s) + '</div>' +
         '</div>';
     }).join('');
+    renderSlipTotals();
+  }
+
+  function slipNoteHTML(s, i) {
+    var auto = salaryAfterAuto(s, state.year);
+    var pay = num(s.payment);
+    var html = '';
+    if (s.afterManual) {
+      html += '②は手入力中（自動計算は' + (pay ? yen(auto) : '—') + '）。';
+      html += '<button class="link-btn" data-slip-auto="' + i + '" style="font-size:11px">自動に戻す</button>';
+    } else {
+      html += pay
+        ? '①' + yen(pay) + ' − 給与所得控除' + yen(salaryDeduction(pay, state.year)) + ' ＝ <b>' + yen(auto) + '</b>（' + state.year + '年分の税法）'
+        : '①を入れると、給与所得控除（' + state.year + '年分は最低' + yen(salaryDedMin(state.year)) + '）を引いた額を自動で出します。';
+    }
+    return html;
+  }
+
+  function slipFootHTML(s) {
+    var pay = num(s.payment);
+    var kofu = pay ? (s.afterManual ? Math.max(0, pay - num(s.after)) : salaryDeduction(pay, state.year)) : 0;
+    return 'この票の給与所得 <b>' + yen(salaryIncomeOf(s, state.year)) + '</b>（控除 ' + yen(kofu) + '）';
+  }
+
+  function refreshSlipNote(i) {
+    var slips = slipsOf();
+    var s = slips[i];
+    if (!s) return;
+    var el = document.querySelector('[data-note="' + i + '"]');
+    if (el) el.innerHTML = slipNoteHTML(s, i);
+    var wrap = document.querySelector('.slip[data-idx="' + i + '"]');
+    if (wrap) {
+      var afterInput = wrap.querySelector('[data-slip="after"]');
+      if (afterInput && !s.afterManual) afterInput.placeholder = num(s.payment) ? String(salaryAfterAuto(s, state.year)) : '0';
+      var foot = wrap.querySelector('.slip-foot');
+      if (foot) foot.innerHTML = slipFootHTML(s);
+    }
+  }
+
+  function renderSlipTotals() {
+    var box = $('slipTotals');
+    if (!box) return;
+    var slips = activeSlips(slipsOf());
+    if (!slips.length) { box.innerHTML = ''; return; }
+    var pay = 0, sal = 0, soc = 0, wh = 0, dedS = 0;
+    slips.forEach(function (s) {
+      pay += num(s.payment); sal += salaryIncomeOf(s, state.year);
+      soc += num(s.social); wh += num(s.taxWithheld); dedS += num(s.deductions);
+    });
+    box.innerHTML =
+      '<div class="st-row"><span>① 支払金額 合計</span><b>' + yen(pay) + '</b></div>' +
+      '<div class="st-row"><span>給与所得 合計（②の合算）</span><b>' + yen(sal) + '</b></div>' +
+      '<div class="st-row"><span>社会保険料等 合計</span><b>' + yen(soc) + '</b></div>' +
+      '<div class="st-row"><span>③ 所得控除 合計</span><b>' + yen(dedS) + '</b></div>' +
+      '<div class="st-row"><span>④ 源泉徴収税額 合計</span><b>' + yen(wh) + '</b></div>';
+  }
+
+  /* ---------- 所得控除の詳細入力 ---------- */
+  function moneyInput(key, val, ph) {
+    return '<input class="input" type="number" inputmode="numeric" min="0" step="1" data-ded="' + key + '" value="' + (val === undefined || val === null ? '' : esc(val)) + '" placeholder="' + esc(ph === undefined ? '0' : ph) + '">';
+  }
+  function out(key, text) { return '<span class="dout" data-out="' + key + '">' + text + '</span>'; }
+
+  var dedOpenState = null;
+  function syncDedOpen() {
+    var box = $('dedDetail');
+    if (!box) return;
+    dedOpenState = [];
+    Array.prototype.forEach.call(box.querySelectorAll('details'), function (dd) { dedOpenState.push(!!dd.open); });
+  }
+
+  function renderDeductions() {
+    var box = $('dedDetail');
+    if (!box) return;
+    if (box.querySelector('details')) syncDedOpen();
+    var d = dedOf();
+    var y = state.year;
+    var lifeAuto = d.lifeMode !== 'manual';
+    var quakeAuto = d.quakeMode !== 'manual';
+    var basicVal = (d.basicManual === undefined || d.basicManual === null) ? '' : d.basicManual;
+
+    var spouseOpts = [['0', 'なし'], ['380000', '配偶者（特別）控除 38万円'],
+      ['330000', '同 33万円'], ['310000', '同 31万円'], ['260000', '同 26万円'], ['210000', '同 21万円'],
+      ['160000', '同 16万円'], ['110000', '同 11万円'], ['60000', '同 6万円'], ['30000', '同 3万円']];
+    function opt(v, label, cur) {
+      var val = String(v).replace(/s$/, '');
+      return '<option value="' + val + '"' + (String(cur || 0) === val ? ' selected' : '') + '>' + esc(label) + '</option>';
+    }
+
+    box.innerHTML =
+      '<details class="dsec" open>' +
+        '<summary><span class="ds-ico">🏥</span><span class="ds-main"><b>社会保険料</b><span>国民年金・国保・任意継続など、源泉徴収票に入っていない分</span></span><span class="ds-amt" data-out="socialTotal">—</span></summary>' +
+        '<div class="ds-body">' +
+          '<label class="field"><span>上記以外の社会保険料（国民年金・国民健康保険・任意継続・後期高齢者医療など）</span>' + moneyInput('socialExtra', d.socialExtra, '0') + '</label>' +
+          '<div class="ds-calc">源泉徴収票の社会保険料 ' + out('socialSlip', '¥0') + ' ＋ ここに入れた額 ＝ <b>' + out('socialTotal2', '¥0') + '</b></div>' +
+        '</div>' +
+      '</details>' +
+
+      '<details class="dsec">' +
+        '<summary><span class="ds-ico">🏦</span><span class="ds-main"><b>小規模企業共済等掛金控除</b><span>iDeCo・小規模企業共済の掛金（全額控除）</span></span><span class="ds-amt">' + out('idecoTotal', '¥0') + '</span></summary>' +
+        '<div class="ds-body">' +
+          '<label class="field"><span>年間の掛金合計（iDeCo・共済掛金）</span>' + moneyInput('ideco', d.ideco, '0') + '</label>' +
+          '<div class="ds-calc">掛金は全額が所得控除になります（上限は掛金の制度側で決まります）。</div>' +
+        '</div>' +
+      '</details>' +
+
+      '<details class="dsec"' + (lifeAuto ? '' : '') + '>' +
+        '<summary><span class="ds-ico">🛡️</span><span class="ds-main"><b>生命保険料控除</b><span>一般・介護医療・個人年金／上限12万円</span></span><span class="ds-amt">' + out('lifeTotal', '¥0') + '</span></summary>' +
+        '<div class="ds-body">' +
+          '<div class="mode-toggle"><button class="mt-btn' + (lifeAuto ? ' on' : '') + '" data-ded-mode="life" data-mode="auto">支払額から自動計算</button><button class="mt-btn' + (!lifeAuto ? ' on' : '') + '" data-ded-mode="life" data-mode="manual">控除額を直接入力</button></div>' +
+          '<div class="' + (lifeAuto ? '' : 'hidden') + '" data-life-panel="auto">' +
+            '<label class="field"><span>新制度・一般生命保険料（2012年以降の契約）</span>' + moneyInput('lifeGenNew', d.lifeGenNew, '0') + '</label>' +
+            '<label class="field"><span>旧制度・一般生命保険料（2011年以前の契約）</span>' + moneyInput('lifeGenOld', d.lifeGenOld, '0') + '</label>' +
+            '<label class="field"><span>介護医療保険料</span>' + moneyInput('lifeCare', d.lifeCare, '0') + '</label>' +
+            '<label class="field"><span>新制度・個人年金保険料</span>' + moneyInput('lifePenNew', d.lifePenNew, '0') + '</label>' +
+            '<label class="field"><span>旧制度・個人年金保険料</span>' + moneyInput('lifePenOld', d.lifePenOld, '0') + '</label>' +
+            '<div class="ds-calc">各区分の控除：' + out('lifeEach', '—') + '／合計（上限12万円）＝ <b>' + out('lifeTotal2', '¥0') + '</b></div>' +
+          '</div>' +
+          '<div class="' + (lifeAuto ? 'hidden' : '') + '" data-life-panel="manual">' +
+            '<label class="field"><span>控除証明書の「控除額」（合計12万円まで）</span>' + moneyInput('lifeManual', d.lifeManual, '0') + '</label>' +
+          '</div>' +
+        '</div>' +
+      '</details>' +
+
+      '<details class="dsec">' +
+        '<summary><span class="ds-ico">🌏</span><span class="ds-main"><b>地震保険料控除</b><span>地震保険＋旧長期損害保険／上限5万円</span></span><span class="ds-amt">' + out('quakeTotal', '¥0') + '</span></summary>' +
+        '<div class="ds-body">' +
+          '<div class="mode-toggle"><button class="mt-btn' + (quakeAuto ? ' on' : '') + '" data-ded-mode="quake" data-mode="auto">支払額から自動計算</button><button class="mt-btn' + (!quakeAuto ? ' on' : '') + '" data-ded-mode="quake" data-mode="manual">控除額を直接入力</button></div>' +
+          '<div class="' + (quakeAuto ? '' : 'hidden') + '" data-quake-panel="auto">' +
+            '<div class="grid2">' +
+            '<label class="field"><span>地震保険料</span>' + moneyInput('quake', d.quake, '0') + '</label>' +
+            '<label class="field"><span>旧長期損害保険料</span>' + moneyInput('quakeOld', d.quakeOld, '0') + '</label>' +
+            '</div>' +
+            '<div class="ds-calc">地震保険料は5万円まで、旧長期は最大1万円。合わせて <b>' + out('quakeTotal2', '¥0') + '</b>（上限5万円）</div>' +
+          '</div>' +
+          '<div class="' + (quakeAuto ? 'hidden' : '') + '" data-quake-panel="manual">' +
+            '<label class="field"><span>控除証明書の控除額（5万円まで）</span>' + moneyInput('quakeManual', d.quakeManual, '0') + '</label>' +
+          '</div>' +
+        '</div>' +
+      '</details>' +
+
+      '<details class="dsec">' +
+        '<summary><span class="ds-ico">💊</span><span class="ds-main"><b>医療費控除</b><span>支払額−補填額−足切り（10万円か所得の5%）</span></span><span class="ds-amt">' + out('medTotal', '¥0') + '</span></summary>' +
+        '<div class="ds-body">' +
+          '<div class="grid2">' +
+          '<label class="field"><span>1年間の医療費（支払額）</span>' + moneyInput('medPaid', d.medPaid, '0') + '</label>' +
+          '<label class="field"><span>補填額（保険金・高額療養費など）</span>' + moneyInput('medReimb', d.medReimb, '0') + '</label>' +
+          '</div>' +
+          '<div class="ds-calc">足切り ' + out('medFloor', '¥100,000') + ' を引いて <b>' + out('medTotal2', '¥0') + '</b>（上限200万円）。セルフメディケーション税制との併用はできません。</div>' +
+        '</div>' +
+      '</details>' +
+
+      '<details class="dsec">' +
+        '<summary><span class="ds-ico">🎁</span><span class="ds-main"><b>寄附金控除</b><span>ふるさと納税・認定NPOなど（寄附額−2,000円）</span></span><span class="ds-amt">' + out('donTotal', '¥0') + '</span></summary>' +
+        '<div class="ds-body">' +
+          '<label class="field"><span>1年間の寄附金の合計（ふるさと納税を含む）</span>' + moneyInput('donation', d.donation, '0') + '</label>' +
+          '<div class="ds-calc">寄附額−2,000円 ＝ <b>' + out('donTotal2', '¥0') + '</b>（総所得の40%が限度）。ワンストップ特例を使った分も、確定申告するならここに入れて構いません。</div>' +
+        '</div>' +
+      '</details>' +
+
+      '<details class="dsec">' +
+        '<summary><span class="ds-ico">👪</span><span class="ds-main"><b>配偶者・扶養・障害者など</b><span>人的控除</span></span><span class="ds-amt">' + out('humanTotal', '¥0') + '</span></summary>' +
+        '<div class="ds-body">' +
+          '<label class="field"><span>配偶者控除・配偶者特別控除</span><select class="input" data-ded="spouse">' +
+            spouseOpts.map(function (o) { return opt(o[0], o[1], d.spouse); }).join('') +
+          '</select></label>' +
+          '<div class="grid2">' +
+          '<label class="field"><span>扶養控除：一般（38万円/人）</span>' + moneyInput('depGeneral', d.depGeneral, '0') + '</label>' +
+          '<label class="field"><span>扶養控除：特定19〜22歳（63万円/人）</span>' + moneyInput('depSpecific', d.depSpecific, '0') + '</label>' +
+          '</div>' +
+          '<label class="field"><span>扶養控除：老人70歳以上（48万円/人）</span>' + moneyInput('depElder', d.depElder, '0') + '</label>' +
+          '<label class="field"><span>障害者・ひとり親・寡婦</span><select class="input" data-ded="disability">' +
+            opt('0', 'なし', d.disability) + opt('270000', '障害者控除 27万円', d.disability) + opt('400000', '特別障害者 40万円', d.disability) + opt('750000', '同居特別障害者 75万円', d.disability) +
+          '</select></label>' +
+          '<label class="field"><span>ひとり親控除・寡婦控除</span><select class="input" data-ded="singleParent">' +
+            opt('0', 'なし', d.singleParent) + opt('350000', 'ひとり親控除 35万円', d.singleParent) + opt('270000', '寡婦控除 27万円', d.singleParent) +
+          '</select></label>' +
+          '<div class="ds-calc">人的控除の小計 <b>' + out('humanTotal2', '¥0') + '</b></div>' +
+        '</div>' +
+      '</details>' +
+
+      '<details class="dsec">' +
+        '<summary><span class="ds-ico">📄</span><span class="ds-main"><b>基礎控除・その他・税額控除</b><span>基礎控除は年度別に自動／住宅ローンは税額控除</span></span><span class="ds-amt">' + out('basicOut', '¥0') + '</span></summary>' +
+        '<div class="ds-body">' +
+          '<label class="field"><span>基礎控除（' + y + '年分の自動額 ' + out('basicAuto', '¥—') + '／空欄なら自動）</span>' + moneyInput('basicManual', basicVal, '自動') + '</label>' +
+          '<label class="field"><span>その他の所得控除（雑損控除など）</span>' + moneyInput('other', d.other, '0') + '</label>' +
+          '<label class="field"><span>住宅借入金等特別控除（税額控除・年末残高から計算した控除額）</span>' + moneyInput('housing', d.housing, '0') + '</label>' +
+          '<div class="ds-calc">基礎控除 <b>' + out('basicOut2', '¥0') + '</b> を所得控除に、住宅ローン控除は所得税から直接引きます。</div>' +
+        '</div>' +
+      '</details>' +
+
+      '<div class="ded-total"><span>所得控除の額の合計</span><b data-out="dedTotal">¥0</b></div>' +
+      '<div class="rate-note">事業の経費・青色申告特別控除と、ここの控除は別物です。控除証明書は12月〜1月に届くので、届いた順に入れていけば申告書の数字がそのまま出来ます。</div>';
+
+    if (dedOpenState) {
+      Array.prototype.forEach.call(box.querySelectorAll('details'), function (dd, i) {
+        if (dedOpenState[i] !== undefined) dd.open = dedOpenState[i];
+      });
+    }
+    refreshDed();
+  }
+
+  function refreshDed() {
+    var sim = computeSim();
+    var b = sim.breakdown;
+    var d = b.d;
+    var y = state.year;
+    var basicAutoText = yen(b.basicAuto);
+
+    function set(key, text) {
+      Array.prototype.forEach.call(document.querySelectorAll('[data-out="' + key + '"]'), function (el) { el.textContent = text; });
+    }
+    set('socialSlip', yen(b.socialSlip));
+    set('socialTotal', yen(b.social));
+    set('socialTotal2', yen(b.social) + '（うち源泉徴収票 ' + yen(b.socialSlip) + '）');
+    set('idecoTotal', yen(b.ideco));
+    set('lifeTotal', yen(b.life));
+    set('lifeTotal2', yen(b.life));
+    set('lifeEach', '一般（新）' + yen(lifeCalcNew(d.lifeGenNew)) + '・一般（旧）' + yen(lifeCalcOld(d.lifeGenOld)) +
+      '・介護医療' + yen(lifeCalcNew(d.lifeCare)) + '・年金（新）' + yen(lifeCalcNew(d.lifePenNew)) + '・年金（旧）' + yen(lifeCalcOld(d.lifePenOld)));
+    set('quakeTotal', yen(b.quake));
+    set('quakeTotal2', yen(b.quake));
+    set('medTotal', yen(b.medical));
+    set('medFloor', yen(b.medFloor));
+    set('medTotal2', yen(b.medical));
+    set('donTotal', yen(b.donation));
+    set('donTotal2', yen(b.donation));
+    set('humanTotal', yen(b.spouse + b.dependents + b.disability + b.singleParent));
+    set('humanTotal2', yen(b.spouse + b.dependents + b.disability + b.singleParent));
+    set('basicOut', yen(b.basic));
+    set('basicAuto', basicAutoText + '（' + basicBandLabel(y, sim.totalIncome) + '）');
+    set('basicOut2', yen(b.basic));
+    set('dedTotal', yen(b.total));
+    var cnt = [b.social, b.ideco, b.life, b.quake, b.medical, b.donation, b.spouse, b.dependents, b.disability + b.singleParent, b.other].filter(function (v) { return v > 0; }).length + 1;
+    var dc = $('dedCount');
+    if (dc) dc.textContent = cnt + '項目';
+    renderSlipTotals();
   }
 
   function renderRiskResults() {
@@ -1554,14 +2044,24 @@
     var sim = computeSim();
 
     $('riskCount').textContent = r.total + '件を診断';
-    var judgment = (r.redCount > 0 || r.structural.some(function (s) { return s.level === 'red'; })) ? '要修正'
-      : (r.amberCount > 0 || r.structural.length ? '要確認' : '問題なし');
+    var hasData = r.total > 0 || sim.sales > 0 || sim.slipCount > 0 || sim.expenses > 0;
+    var judgment = !hasData ? '未入力'
+      : ((r.redCount > 0 || r.structural.some(function (s) { return s.level === 'red'; })) ? '要修正'
+        : (r.amberCount > 0 || r.structural.length ? '要確認' : '問題なし'));
+
+    var chip = $('bnChip');
+    if (chip) {
+      chip.className = 'bn-chip ' + (judgment === '問題なし' ? 'ok' : (judgment === '要修正' ? 'red' : (judgment === '未入力' ? 'gray' : 'amber')));
+      chip.textContent = yearLabel(state.year) + '分：' + judgment;
+    }
+    var bnSub = $('bnLast');
+    if (bnSub) bnSub.textContent = '指摘 ' + (r.flags.length + r.structural.length) + '件（赤' + r.redCount + '・黄' + r.amberCount + '）｜経費 ' + yen(sim.expenses + sim.dokujuu) + '／売上 ' + yen(sim.sales);
 
     sum.innerHTML =
       '<div class="risk-chips">' +
       '<div class="rchip red"><div class="n">' + r.redCount + '件</div><div class="t">🔴 すぐ外す・直す</div><div class="t">' + yen(r.redAmt) + '</div></div>' +
       '<div class="rchip amber"><div class="n">' + r.amberCount + '件</div><div class="t">🟡 要確認・按分</div><div class="t">' + yen(r.amberAmt) + '</div></div>' +
-      '<div class="rchip ok' + (judgment !== '問題なし' ? ' warn' : '') + '"><div class="n">' + (judgment === '問題なし' ? '✅ 問題なし' : (judgment === '要修正' ? '⚠️ 要修正' : '🔍 要確認')) + '</div>' +
+      '<div class="rchip ok' + (judgment === '問題なし' ? '' : ' warn') + '"><div class="n">' + (judgment === '問題なし' ? '✅ 問題なし' : (judgment === '要修正' ? '⚠️ 要修正' : (judgment === '未入力' ? '— 未入力' : '🔍 要確認'))) + '</div>' +
       '<div class="t">' + (r.flags.length + r.structural.length) + '件の指摘｜経費 ' + yen(sim.expenses + sim.dokujuu) + '／売上 ' + yen(sim.sales) + '</div></div>' +
       '</div>';
 
@@ -1599,6 +2099,7 @@
   function renderSim(sim) {
     var box = $('simResult');
     if (!box) return;
+    var b = sim.breakdown;
 
     var rows = [];
     function neg(v) { return v ? '−' + yen(v) : '¥0'; }
@@ -1607,11 +2108,36 @@
     if (sim.dokujuu) rows.push(['専従者給与', neg(sim.dokujuu), '']);
     rows.push(['青色申告特別控除', neg(sim.blueApplied) + (sim.blueApplied < sim.blue ? '（所得が少ないため減額）' : ''), 'blue']);
     rows.push(['＝ 事業所得', yenSigned(sim.biz), sim.biz < 0 ? 'neg' : '']);
-    if (sim.slipCount) rows.push(['＋ 給与所得', yenSigned(sim.salary), '']);
+    if (sim.slipCount) rows.push(['＋ 給与所得（' + sim.slipCount + '枚の合算）', yenSigned(sim.salary), '']);
     rows.push(['＝ 合計所得金額', yenSigned(sim.totalIncome), '']);
-    rows.push(['− 所得控除の額の合計', neg(sim.deductions) + (sim.deductionsManual ? '（手入力）' : '（源泉徴収票③）'), '']);
+    rows.push(['− 所得控除の内訳', '', '']);
+
+    var detail = [
+      ['　社会保険料控除', b.social],
+      ['　小規模企業共済等掛金控除', b.ideco],
+      ['　生命保険料控除', b.life],
+      ['　地震保険料控除', b.quake],
+      ['　医療費控除', b.medical],
+      ['　寄附金控除', b.donation],
+      ['　配偶者（特別）控除', b.spouse],
+      ['　扶養控除', b.dependents],
+      ['　障害者・ひとり親・寡婦控除', b.disability + b.singleParent],
+      ['　基礎控除', b.basic],
+      ['　その他', b.other]
+    ];
+    detail.forEach(function (r2) {
+      if (!r2[1]) return;
+      rows.push([r2[0], '−' + yen(r2[1]), '']);
+    });
+    rows.push(['− 所得控除の額の合計', neg(sim.ded), '']);
     rows.push(['＝ 課税される所得金額', yenSigned(sim.taxable), 'blue']);
-    rows.push(['所得税', yen(sim.incomeTax), '']);
+    if (sim.housing) {
+      rows.push(['所得税（累進税率）', yen(sim.incomeTaxBase), '']);
+      rows.push(['− 住宅借入金等特別控除（税額控除）', neg(sim.housing), '']);
+      rows.push(['所得税（控除後）', yen(sim.incomeTax), '']);
+    } else {
+      rows.push(['所得税（累進税率）', yen(sim.incomeTax), '']);
+    }
     rows.push(['復興特別所得税（2.1%）', yen(sim.fukko), '']);
     rows.push(['所得税及び復興特別所得税', yen(sim.totalTax), '']);
     if (sim.slipCount) rows.push(['− 源泉徴収税額（前払い済み）', neg(sim.withheld), '']);
@@ -1624,11 +2150,20 @@
     html += '</div>';
 
     if (sim.diff > 0) {
-      html += '<div class="sim-box pay"><div class="lbl">納める税金の見込み</div><div class="amt">' + yen(sim.diff) + '</div></div>';
+      html += '<div class="sim-box pay"><div class="lbl">追加で納める税金の見込み</div><div class="amt">' + yen(sim.diff) + '</div></div>';
     } else if (sim.diff < 0) {
       html += '<div class="sim-box refund"><div class="lbl">還付される見込み</div><div class="amt">' + yen(-sim.diff) + '</div></div>';
     } else {
       html += '<div class="sim-box zero"><div class="lbl">納付も還付もなし</div><div class="amt">¥0</div></div>';
+    }
+
+    /* 入力の不整合・上限チェック */
+    if (sim.warnings.length) {
+      html += '<div class="val-box"><div class="val-title">入力チェック（' + sim.warnings.length + '件）</div>';
+      sim.warnings.forEach(function (w) {
+        html += '<div class="val-item ' + w.level + '"><span class="vi">' + (w.level === 'warn' ? '⚠️' : 'ℹ️') + '</span><span>' + esc(w.text) + '</span></div>';
+      });
+      html += '</div>';
     }
 
     var notes = '';
@@ -1637,7 +2172,8 @@
     } else if (sim.biz < 0 && sim.salary > 0) {
       notes += '<div class="info-box">事業所得が赤字（' + yenSigned(sim.biz) + '）なので、給与所得と損益通算して課税所得を下げています。この通算が認められるのは「事業所得」と認められた場合だけです（雑所得は通算できません）。</div>';
     }
-    notes += '<div class="hint-ok">この試算は所得税の目安です。住民税は別に、課税所得の約10%＋均等割（自治体により約5,000円）が翌年にかかります（この年度の概算：' + yen(sim.residentTax) + '）。医療費控除・ふるさと納税・住宅ローン控除などは入っていないため、実際の税額は変わります。</div>';
+    notes += '<div class="resident-box"><span>住民税の概算（翌年6月〜）</span><b>' + yen(sim.residentTax) + '</b><span class="rb-sub">所得割 ' + yen(Math.max(0, sim.residentTax - 5000)) + ' ＋ 均等割 約¥5,000（自治体により異なります）</span></div>';
+    notes += '<div class="hint-ok">所得税は 課税所得×累進税率−控除額＋復興特別所得税2.1%、そこから住宅ローン控除と源泉徴収税額を引いた額です。基礎控除・給与所得控除は国税庁の年度別表（' + sim.year + '年分）で自動計算しています。住民税は基礎控除' + (sim.year >= 2026 ? '45万円' : '43万円') + 'として概算。最終確認はe-Taxの計算結果で行ってください。</div>';
     box.innerHTML = html + notes;
   }
 
@@ -2026,9 +2562,26 @@
     }
     sec2.push({ label: '所得金額等「事業所得（営業等）」', src: '決算書の所得金額と同じ数字', v: sim.biz });
     sec2.push({ label: '合計所得金額', src: '給与所得＋事業所得', v: sim.totalIncome, total: true });
-    sec2.push({ label: '所得控除の額の合計', src: sim.deductionsManual ? '手入力の合計' : '源泉徴収票③', v: sim.deductions });
+    var b = sim.breakdown;
+    [['社会保険料控除', '源泉徴収票の社会保険料＋国保・年金など', b.social],
+     ['小規模企業共済等掛金控除', 'iDeCo・共済掛金', b.ideco],
+     ['生命保険料控除', '一般・介護医療・個人年金（上限12万円）', b.life],
+     ['地震保険料控除', '地震保険＋旧長期（上限5万円）', b.quake],
+     ['医療費控除', '支払額−補填額−足切り' + yen(b.medFloor), b.medical],
+     ['寄附金控除', 'ふるさと納税など（寄附額−2,000円）', b.donation],
+     ['配偶者（特別）控除', 'この画面で選択した額', b.spouse],
+     ['扶養控除', '一般38万・特定63万・老人48万', b.dependents],
+     ['障害者・ひとり親・寡婦控除', '選択した区分の額', b.disability + b.singleParent],
+     ['基礎控除', sim.year + '年分の自動計算' + (b.basicSet ? '（手入力）' : ''), b.basic],
+     ['その他の所得控除', '雑損控除など', b.other]
+    ].forEach(function (r) {
+      if (!r[2]) return;
+      sec2.push({ label: r[0], src: r[1], v: r[2] });
+    });
+    sec2.push({ label: '所得控除の額の合計', src: '上の控除の合計', v: sim.ded });
     sec2.push({ label: '課税される所得金額', src: '自動計算（1,000円未満切り捨て）', v: sim.taxable, total: true });
-    sec2.push({ label: '所得税及び復興特別所得税', src: '税率を掛けて自動計算', v: sim.totalTax });
+    if (sim.housing) sec2.push({ label: '住宅借入金等特別控除（税額控除）', src: '所得税から直接控除', v: sim.housing });
+    sec2.push({ label: '所得税及び復興特別所得税', src: '税率を掛けて自動計算' + (sim.housing ? '（住宅ローン控除後）' : ''), v: sim.totalTax });
     if (sim.slipCount) sec2.push({ label: '源泉徴収税額', src: '源泉徴収票④の合計', v: sim.withheld });
     sec2.push({
       label: sim.diff >= 0 ? '納める税金' : '還付される税金',
@@ -2127,9 +2680,9 @@
     rows4.push(['青色申告特別控除前の所得金額', sim.beforeBlue, '']);
     rows4.push(['青色申告特別控除', sim.blueApplied, sim.blueApplied < sim.blue ? '所得を限度に減額' : '']);
     rows4.push(['事業所得', sim.biz, sim.biz < 0 ? '赤字（給与所得と損益通算）' : '']);
-    rows4.push(['給与所得（源泉徴収票②）', sim.salary, sim.slipCount + '枚']);
+    rows4.push(['給与所得（源泉徴収票②の合算）', sim.salary, sim.slipCount + '枚']);
     rows4.push(['合計所得金額', sim.totalIncome, '']);
-    rows4.push(['所得控除の額の合計', sim.deductions, sim.deductionsManual ? '手入力' : '源泉徴収票③から自動']);
+    rows4.push(['所得控除の額の合計', sim.ded, '所得控除の詳細から自動計算']);
     rows4.push(['課税される所得金額', sim.taxable, '']);
     rows4.push(['所得税', sim.incomeTax, '']);
     rows4.push(['復興特別所得税', sim.fukko, '']);
@@ -2142,15 +2695,93 @@
       if (ws4['B' + r4] && typeof ws4['B' + r4].v === 'number') ws4['B' + r4].z = '#,##0';
     }
 
+    /* 税務診断・源泉（源泉徴収票の内訳＋所得控除の内訳＋税額試算＋診断） */
+    var bd = sim.breakdown;
+    var rows5 = [];
+    rows5.push(['税務診断・源泉 ' + state.year + '年分（令和' + reiwa(state.year) + '年分）', '', '', '', '', '', '']);
+    rows5.push([]);
+    rows5.push(['■ 源泉徴収票の内訳', '', '', '', '', '', '']);
+    rows5.push(['No', '支払者', '支払金額①', '給与所得控除後の金額②', '社会保険料等', '所得控除の額③', '源泉徴収税額④']);
+    var slipsAll = activeSlips(slipsOf());
+    var tPay = 0, tSal = 0, tSoc = 0, tDed = 0, tWh = 0;
+    slipsAll.forEach(function (sl, i) {
+      var sal = salaryIncomeOf(sl, state.year);
+      tPay += num(sl.payment); tSal += sal; tSoc += num(sl.social); tDed += num(sl.deductions); tWh += num(sl.taxWithheld);
+      rows5.push([i + 1, sl.payer || '（名称なし）', num(sl.payment), sal + (sl.afterManual ? 0 : 0), num(sl.social), num(sl.deductions), num(sl.taxWithheld)]);
+    });
+    if (!slipsAll.length) rows5.push(['—', '源泉徴収票の入力なし', 0, 0, 0, 0, 0]);
+    rows5.push(['合計', slipsAll.length + '枚', tPay, tSal, tSoc, tDed, tWh]);
+    rows5.push(['', '②は①−給与所得控除で自動計算（手入力があればその額）', '', '', '', '', '']);
+    rows5.push([]);
+    rows5.push(['■ 所得控除の内訳', '', '']);
+    rows5.push(['項目', '金額', '算定・備考']);
+    [
+      ['社会保険料控除', bd.social, '源泉徴収票の社会保険料 ' + bd.socialSlip + ' ＋ 国保・年金など ' + num(bd.d.socialExtra)],
+      ['小規模企業共済等掛金控除', bd.ideco, 'iDeCo・小規模企業共済の掛金'],
+      ['生命保険料控除', bd.life, bd.d.lifeMode === 'manual' ? '控除額を直接入力' : '一般（新）' + lifeCalcNew(bd.d.lifeGenNew) + '／一般（旧）' + lifeCalcOld(bd.d.lifeGenOld) + '／介護医療' + lifeCalcNew(bd.d.lifeCare) + '／年金（新）' + lifeCalcNew(bd.d.lifePenNew) + '／年金（旧）' + lifeCalcOld(bd.d.lifePenOld) + '（上限12万円）'],
+      ['地震保険料控除', bd.quake, '地震保険料 ' + num(bd.d.quake) + '／旧長期 ' + num(bd.d.quakeOld) + '（上限5万円）'],
+      ['医療費控除', bd.medical, '支払 ' + bd.medPaid + ' − 補填 ' + bd.medReimb + ' − 足切り ' + bd.medFloor],
+      ['寄附金控除', bd.donation, '寄附 ' + bd.donPaid + ' − 2,000円（限度 ' + bd.donCap + '）'],
+      ['配偶者（特別）控除', bd.spouse, '選択した区分'],
+      ['扶養控除', bd.dependents, '一般 ' + bd.depGeneral + '／特定 ' + bd.depSpecific + '／老人 ' + bd.depElder],
+      ['障害者・ひとり親・寡婦控除', bd.disability + bd.singleParent, '障害者 ' + bd.disability + '／ひとり親・寡婦 ' + bd.singleParent],
+      ['基礎控除', bd.basic, bd.basicSet ? '手入力（自動計算 ' + bd.basicAuto + '）' : state.year + '年分の自動計算'],
+      ['その他の所得控除', bd.other, '雑損控除など']
+    ].forEach(function (r) { if (r[1]) rows5.push([r[0], r[1], r[2]]); });
+    rows5.push(['所得控除の額の合計', bd.total, '']);
+    rows5.push([]);
+    rows5.push(['■ 税額の試算', '', '']);
+    rows5.push(['項目', '金額', '備考']);
+    rows5.push(['事業売上（収入）', sim.sales, '']);
+    rows5.push(['必要経費', sim.expenses, '']);
+    rows5.push(['青色申告特別控除', sim.blueApplied, sim.blueApplied < sim.blue ? '所得を限度に減額' : '']);
+    rows5.push(['事業所得', sim.biz, sim.biz < 0 ? '赤字（給与所得と損益通算）' : '']);
+    rows5.push(['給与収入', sim.pay, slipsAll.length + '枚']);
+    rows5.push(['給与所得', sim.salary, '②の合算']);
+    rows5.push(['合計所得金額', sim.totalIncome, '給与所得＋事業所得']);
+    rows5.push(['所得控除の額の合計', sim.ded, '']);
+    rows5.push(['課税される所得金額', sim.taxable, '1,000円未満切り捨て']);
+    rows5.push(['所得税（累進税率）', sim.incomeTaxBase, '']);
+    rows5.push(['住宅借入金等特別控除', sim.housing, '税額控除']);
+    rows5.push(['復興特別所得税', sim.fukko, '所得税の2.1%']);
+    rows5.push(['所得税及び復興特別所得税', sim.totalTax, '']);
+    rows5.push(['源泉徴収税額', sim.withheld, '前払い済み']);
+    rows5.push([sim.diff >= 0 ? '追加納税の見込み' : '還付の見込み', Math.abs(sim.diff), '']);
+    rows5.push(['住民税の概算（翌年）', sim.residentTax, '所得割＋均等割の目安']);
+    rows5.push([]);
+    rows5.push(['■ 税務診断', '', '']);
+    rows5.push(['判定', 'リスク項目', '理由・対応']);
+    rk.structural.forEach(function (st) { rows5.push([st.level === 'red' ? '赤' : '黄', st.title, st.why]); });
+    rk.flags.forEach(function (f) { rows5.push([f.level === 'red' ? '赤' : '黄', f.title + '（' + f.vendor + (f.amount ? ' ' + f.amount + '円' : '') + '）', f.why]); });
+    if (!rk.structural.length && !rk.flags.length) rows5.push(['—', '指摘なし', '']);
+    rows5.push([]);
+    rows5.push(['入力チェック', '', '']);
+    if (sim.warnings.length) {
+      sim.warnings.forEach(function (w) { rows5.push([w.level === 'warn' ? '要修正' : '参考', w.text, '']); });
+    } else {
+      rows5.push(['—', '不整合はありません', '']);
+    }
+
+    var ws5 = XLSX.utils.aoa_to_sheet(rows5);
+    styleWidths(ws5, [22, 20, 20, 22, 16, 18, 16]);
+    for (var r5 = 1; r5 <= rows5.length; r5 += 1) {
+      for (var c5 = 2; c5 <= 7; c5 += 1) {
+        var cell5 = ws5[XLSX.utils.encode_cell({ r: r5 - 1, c: c5 - 1 })];
+        if (cell5 && typeof cell5.v === 'number') cell5.z = '#,##0';
+      }
+    }
+
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, maskSheetName('領収書明細'));
     XLSX.utils.book_append_sheet(wb, ws2, maskSheetName('科目別集計'));
     XLSX.utils.book_append_sheet(wb, ws3, maskSheetName('税務チェック'));
+    XLSX.utils.book_append_sheet(wb, ws5, maskSheetName('税務診断・源泉'));
     XLSX.utils.book_append_sheet(wb, ws4, maskSheetName('確定申告サマリー'));
     return {
       wb: wb,
       filename: '領収書一覧_' + state.year + '_' + stamp() + '.xlsx',
-      total: total, count: list.length
+      total: total, count: list.length,
+      hasTaxData: activeSlips(slipsOf()).length > 0 || salesOf() > 0
     };
   }
 
@@ -2229,7 +2860,7 @@
 
   function saveWorkbook(preferShare) {
     var built = buildWorkbook();
-    if (!built.count) {
+    if (!built.count && !built.hasTaxData) {
       toast('先に領収書を1件以上登録してください', true);
       return;
     }
@@ -2306,10 +2937,18 @@
     if (sim.dokujuu) lines.push('専従者給与\t' + sim.dokujuu);
     lines.push('青色申告特別控除額\t' + sim.blueApplied);
     lines.push('所得金額（事業所得）\t' + sim.biz);
+    lines.push('給与収入\t' + sim.pay);
     lines.push('給与所得\t' + sim.salary);
     lines.push('合計所得金額\t' + sim.totalIncome);
-    lines.push('所得控除の額の合計\t' + sim.deductions);
+    var bb = sim.breakdown;
+    [['社会保険料控除', bb.social], ['小規模企業共済等掛金控除', bb.ideco], ['生命保険料控除', bb.life],
+     ['地震保険料控除', bb.quake], ['医療費控除', bb.medical], ['寄附金控除', bb.donation],
+     ['配偶者（特別）控除', bb.spouse], ['扶養控除', bb.dependents],
+     ['障害者・ひとり親・寡婦控除', bb.disability + bb.singleParent], ['基礎控除', bb.basic], ['その他', bb.other]
+    ].forEach(function (r) { if (r[1]) lines.push(r[0] + '\t' + r[1]); });
+    lines.push('所得控除の額の合計\t' + sim.ded);
     lines.push('課税される所得金額\t' + sim.taxable);
+    if (sim.housing) lines.push('住宅借入金等特別控除\t' + sim.housing);
     lines.push('所得税及び復興特別所得税\t' + sim.totalTax);
     lines.push('源泉徴収税額\t' + sim.withheld);
     lines.push((sim.diff >= 0 ? '納める税金' : '還付される税金') + '\t' + Math.abs(sim.diff));
@@ -2476,12 +3115,37 @@
       renderRiskResults();
       renderBoard();
     });
-    $('deductionsInput').addEventListener('input', function () {
-      if (this.value === '') delete state.deductions[ykey()];
-      else state.deductions[ykey()] = Math.max(0, Math.round(num(this.value)));
+    /* 所得控除の詳細（支払額→控除額を自動計算） */
+    function dedInputHandler(ev) {
+      var el = ev.target.closest('[data-ded]');
+      if (!el) return;
+      var key = el.getAttribute('data-ded');
+      var d = dedOf();
+      if (el.tagName === 'SELECT') {
+        d[key] = Number(el.value) || 0;
+      } else {
+        d[key] = el.value === '' ? '' : Math.max(0, Math.round(num(el.value)));
+      }
       persist();
+      refreshDed();
       renderRiskResults();
       renderBoard();
+    }
+    $('dedDetail').addEventListener('toggle', syncDedOpen, true);
+    $('dedDetail').addEventListener('input', dedInputHandler);
+    $('dedDetail').addEventListener('change', dedInputHandler);
+    $('dedDetail').addEventListener('click', function (ev) {
+      var modeBtn = ev.target.closest('[data-ded-mode]');
+      if (modeBtn) {
+        var which = modeBtn.getAttribute('data-ded-mode');
+        var d = dedOf();
+        if (which === 'life') d.lifeMode = modeBtn.getAttribute('data-mode');
+        if (which === 'quake') d.quakeMode = modeBtn.getAttribute('data-mode');
+        persist();
+        renderDeductions();
+        renderRiskResults();
+        renderBoard();
+      }
     });
 
     $('slipList').addEventListener('input', function (ev) {
@@ -2491,19 +3155,35 @@
       var idx = parseInt(wrap.getAttribute('data-idx'), 10);
       var slips = slipsOf();
       if (!slips[idx]) return;
-      slips[idx][input.getAttribute('data-slip')] = input.value;
-      persist();
-      renderRiskResults();
-      if (document.activeElement === $('deductionsInput')) return;
-      var di = $('deductionsInput');
-      if (di && state.deductions[ykey()] === undefined) {
-        var auto = slipsAutoDeduction(slips);
-        di.value = auto ? String(auto) : '';
-        di.placeholder = auto ? '源泉徴収票③から自動（' + yen(auto) + '）' : '源泉徴収票③から自動';
+      var key = input.getAttribute('data-slip');
+      if (key === 'after') {
+        if (input.value === '') { slips[idx].afterManual = false; slips[idx].after = ''; }
+        else { slips[idx].afterManual = true; slips[idx].after = Math.max(0, Math.round(num(input.value))); }
+      } else if (key === 'payer') {
+        slips[idx].payer = input.value;
+      } else {
+        slips[idx][key] = input.value === '' ? '' : Math.max(0, Math.round(num(input.value)));
       }
+      persist();
+      refreshSlipNote(idx);
+      renderSlipTotals();
+      refreshDed();
+      renderRiskResults();
       renderBoard();
     });
     $('slipList').addEventListener('click', function (ev) {
+      var autoBtn = ev.target.closest('[data-slip-auto]');
+      if (autoBtn) {
+        var ai = parseInt(autoBtn.getAttribute('data-slip-auto'), 10);
+        var sl = slipsOf()[ai];
+        if (sl) { sl.afterManual = false; sl.after = ''; }
+        persist();
+        renderSlips();
+        refreshDed();
+        renderRiskResults();
+        renderBoard();
+        return;
+      }
       var btn = ev.target.closest('[data-slip-del]');
       if (!btn) return;
       var idx = parseInt(btn.getAttribute('data-slip-del'), 10);
@@ -2512,15 +3192,20 @@
       slips.splice(idx, 1);
       persist();
       renderRiskInputs();
+      refreshDed();
       renderRiskResults();
       renderBoard();
     });
     $('btnAddSlip').addEventListener('click', function () {
-      slipsOf().push({ id: uid(), payer: '', payment: '', afterDeduction: '', deductions: '', taxWithheld: '' });
+      slipsOf().push({ id: uid(), payer: '', payment: '', after: '', afterManual: false, social: '', deductions: '', taxWithheld: '' });
       persist();
       renderRiskInputs();
+      refreshDed();
       renderRiskResults();
       renderBoard();
+      var box = $('slipList');
+      var last = box && box.lastElementChild;
+      if (last) { var f = last.querySelector('[data-slip="payment"]'); if (f) f.focus(); }
     });
 
     $('btnImport').addEventListener('click', function () { $('fileImport').click(); });
@@ -2615,6 +3300,20 @@
     setYear: function (y) { state.year = y; persist(); renderAll(); },
     setMode: function (m) { switchMode(m); },
     setSales: function (v) { state.sales[ykey()] = Number(v) || 0; persist(); renderAll(); },
+    setDed: function (patch) {
+      var d = dedOf();
+      Object.keys(patch || {}).forEach(function (k) { d[k] = patch[k]; });
+      persist(); renderAll();
+      return d;
+    },
+    getDed: function () { return dedOf(); },
+    addSlip: function (sl) {
+      var x = Object.assign({ id: uid(), payer: '', payment: '', after: '', afterManual: false, social: '', deductions: '', taxWithheld: '' }, sl || {});
+      slipsOf().push(x);
+      persist(); renderAll();
+      return x;
+    },
+    sim: function () { return computeSim(); },
     addEntry: function (e) {
       var x = Object.assign({ id: uid(), date: todayStr(), vendor: '', category: '雑費', currency: 'JPY', amount: 0, taxType: '', invoiceNo: '', memo: '', source: 'manual', createdAt: new Date().toISOString() }, e);
       taxList().push(x);
@@ -2625,7 +3324,8 @@
       return {
         mode: state.mode, year: state.year, rate: state.rate,
         tax: taxList(), trip: state.trip,
-        sales: salesOf(), blue: blueOf(), slips: slipsOf(),
+        sales: salesOf(), blue: blueOf(), slips: slipsOf(), ded: dedOf(),
+        sim: (function () { var x = computeSim(); return { salary: x.salary, totalIncome: x.totalIncome, ded: x.ded, taxable: x.taxable, totalTax: x.totalTax, diff: x.diff, residentTax: x.residentTax, warnings: x.warnings }; })(),
         drafts: state.drafts.map(function (d) {
           return { id: d.id, status: d.status, progress: d.progress, message: d.message, fields: d.fields, text: (d.text || '').slice(0, 600) };
         })
