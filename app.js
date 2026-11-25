@@ -2798,19 +2798,21 @@
       '（この経費を消耗品費などで全額計上すると、償却分と二重計上になります）\n\n' +
       '固定資産台帳にも登録しますか？\n' +
       '資産名：' + name + '\n取得日：' + entry.date + '\n定額法 ' + life + '年で仮登録し、あとから税務診断タブで直せます。';
-    if (!window.confirm(msg)) return;
-    var y = parseInt(String(entry.date || '').slice(0, 4), 10);
-    if (!(y >= 2000 && y <= 2100)) y = state.year;
-    var a = {
-      id: 'dep-' + uid(), name: name, acquired: entry.date || '', cost: amount,
-      method: '定額法', life: life, rate: DEP_RATES[life] || 0.2, months: '',
-      bizPct: 100,
-      memo: 'レシートから自動登録（支払先：' + (entry.vendor || '—') + '）。耐用年数・事業割合は要確認。',
-      opening: '', override: '', source: 'receipt'
-    };
-    assetsOf(y).push(a);
-    persist();
-    toast('固定資産台帳に「' + name + '」を登録しました（税務診断タブで確認してください）');
+    confirmInPage(msg).then(function (ok) {
+      if (!ok) return;
+      var y = parseInt(String(entry.date || '').slice(0, 4), 10);
+      if (!(y >= 2000 && y <= 2100)) y = state.year;
+      var a = {
+        id: 'dep-' + uid(), name: name, acquired: entry.date || '', cost: amount,
+        method: '定額法', life: life, rate: DEP_RATES[life] || 0.2, months: '',
+        bizPct: 100,
+        memo: 'レシートから自動登録（支払先：' + (entry.vendor || '—') + '）。耐用年数・事業割合は要確認。',
+        opening: '', override: '', source: 'receipt'
+      };
+      assetsOf(y).push(a);
+      persist();
+      toast('固定資産台帳に「' + name + '」を登録しました（税務診断タブで確認してください）');
+    });
   }
   function depRestore() {
   }
@@ -3202,6 +3204,42 @@
       toast('書き出しに失敗しました', true);
     }
   }
+  /* WebView等で window.confirm が表示されない（自動キャンセルされる）環境向けの画面内確認ダイアログ */
+  function confirmInPage(message) {
+    return new Promise(function (resolve) {
+      var old = document.getElementById('inpage-confirm');
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+      var wrap = document.createElement('div');
+      wrap.id = 'inpage-confirm';
+      wrap.setAttribute('style', 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;');
+      var box = document.createElement('div');
+      box.setAttribute('style', 'background:#fff;color:#111;border-radius:14px;max-width:420px;width:100%;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.3);');
+      var txt = document.createElement('div');
+      txt.setAttribute('style', 'white-space:pre-wrap;font-size:14px;line-height:1.6;margin-bottom:14px;');
+      txt.textContent = message;
+      var row = document.createElement('div');
+      row.setAttribute('style', 'display:flex;gap:10px;justify-content:flex-end;');
+      var cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.textContent = 'キャンセル';
+      cancel.setAttribute('style', 'padding:10px 16px;border-radius:10px;border:1px solid #ccc;background:#f5f5f5;font-size:14px;');
+      var ok = document.createElement('button');
+      ok.type = 'button';
+      ok.textContent = 'OK';
+      ok.setAttribute('style', 'padding:10px 18px;border-radius:10px;border:0;background:#1677ff;color:#fff;font-size:14px;font-weight:700;');
+      function done(v) { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); resolve(v); }
+      cancel.addEventListener('click', function () { done(false); });
+      ok.addEventListener('click', function () { done(true); });
+      wrap.addEventListener('click', function (e) { if (e.target === wrap) done(false); });
+      row.appendChild(cancel);
+      row.appendChild(ok);
+      box.appendChild(txt);
+      box.appendChild(row);
+      wrap.appendChild(box);
+      document.body.appendChild(wrap);
+    });
+  }
+
   function applyJSON(data, filename) {
     if (!data || typeof data !== 'object') throw new Error('データの形式が違います');
     if (!data.ledgers && !data.sales && !data.assets && !data.slips && !data.trip) throw new Error('このファイルには税金データが入っていません');
@@ -3213,24 +3251,26 @@
     }
     var msg = '読み込むデータ：' + Object.keys(led).join('・') + '年分／経費 ' + counts.led + '件・減価償却 ' + counts.assets + '件\n' +
       'この端末の同じ年度のデータは、読み込んだ内容で置きかわります。よろしいですか？';
-    if (!window.confirm(msg)) return;
-    if (data.ledgers) state.ledgers = data.ledgers;
-    if (data.sales) state.sales = data.sales;
-    if (data.blue) state.blue = data.blue;
-    if (data.slips) state.slips = data.slips;
-    if (data.ded) state.ded = data.ded;
-    if (data.checks) state.checks = data.checks;
-    if (data.assets) state.assets = data.assets;
-    if (data.revs) state.revs = data.revs;
-    if (Array.isArray(data.trip)) state.trip = data.trip;
-    if (typeof data.rate === 'number' && data.rate > 0) state.rate = data.rate;
-    if (typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100) state.year = data.year;
-    if (typeof data.sheet2026Applied === 'boolean') state.sheet2026Applied = data.sheet2026Applied;
-    persist();
-    renderAll();
-    var yl = $('yearSelect'); if (yl) yl.value = String(state.year);
-    var ri = $('rateInput'); if (ri) ri.value = state.rate;
-    toast('読み込みました（経費 ' + counts.led + '件・減価償却 ' + counts.assets + '件）');
+    confirmInPage(msg).then(function (ok) {
+      if (!ok) return;
+      if (data.ledgers) state.ledgers = data.ledgers;
+      if (data.sales) state.sales = data.sales;
+      if (data.blue) state.blue = data.blue;
+      if (data.slips) state.slips = data.slips;
+      if (data.ded) state.ded = data.ded;
+      if (data.checks) state.checks = data.checks;
+      if (data.assets) state.assets = data.assets;
+      if (data.revs) state.revs = data.revs;
+      if (Array.isArray(data.trip)) state.trip = data.trip;
+      if (typeof data.rate === 'number' && data.rate > 0) state.rate = data.rate;
+      if (typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100) state.year = data.year;
+      if (typeof data.sheet2026Applied === 'boolean') state.sheet2026Applied = data.sheet2026Applied;
+      persist();
+      renderAll();
+      var yl = $('yearSelect'); if (yl) yl.value = String(state.year);
+      var ri = $('rateInput'); if (ri) ri.value = state.rate;
+      toast('読み込みました（経費 ' + counts.led + '件・減価償却 ' + counts.assets + '件）');
+    });
   }
   function importJSONFile(file) {
     if (!file) return;
