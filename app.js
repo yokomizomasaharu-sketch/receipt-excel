@@ -716,6 +716,8 @@
       : '「' + (entry.vendor || entry.category) + '」を ' + yen(entry.amount) + ' で追加しました');
 
     signal((state.mode === 'trip' ? 'ソウル旅行に' : '経費帳に') + '「' + (entry.vendor || entry.category) + '」' + yenOf(entry) + ' を登録しました。');
+
+    maybeRegisterAsset(entry, d);
   }
 
   function removeDraft(d) {
@@ -2774,6 +2776,41 @@
     renderDep();
     var el = document.querySelector('[data-row="' + a.id + '"] [data-f="name"]');
     if (el) el.focus();
+  }
+
+  /* レシート（経費）保存時の固定資産台帳への登録提案。
+     10万円以上の備品は全額経費ではなく減価償却が原則なので、高額な領収書では台帳登録を促す。 */
+  function guessAssetLife(name) {
+    var s = String(name || '');
+    if (/macbook|imac|パソコン|ノート\s*pc|デスクトップ/i.test(s)) return 4;
+    if (/iphone|スマートフォン|スマホ|携帯電話/.test(s)) return 10;
+    return 5; /* カメラ・レンズ・その他の器具備品 */
+  }
+  function maybeRegisterAsset(entry, d) {
+    if (d && d.editingId) return;
+    if (state.mode === 'trip') return;
+    var amount = num(entry.amount);
+    if (!amount || amount < 100000) return;
+    var name = (entry.memo || '').trim() || (entry.vendor || '').trim() || entry.category || '資産';
+    var life = guessAssetLife(name + ' ' + (entry.vendor || ''));
+    var msg = 'この領収書は ' + yen(amount) + ' と高額です。\n' +
+      '10万円以上の備品は、全額を経費にするのではなく固定資産台帳で減価償却するのが原則です。\n' +
+      '（この経費を消耗品費などで全額計上すると、償却分と二重計上になります）\n\n' +
+      '固定資産台帳にも登録しますか？\n' +
+      '資産名：' + name + '\n取得日：' + entry.date + '\n定額法 ' + life + '年で仮登録し、あとから税務診断タブで直せます。';
+    if (!window.confirm(msg)) return;
+    var y = parseInt(String(entry.date || '').slice(0, 4), 10);
+    if (!(y >= 2000 && y <= 2100)) y = state.year;
+    var a = {
+      id: 'dep-' + uid(), name: name, acquired: entry.date || '', cost: amount,
+      method: '定額法', life: life, rate: DEP_RATES[life] || 0.2, months: '',
+      bizPct: 100,
+      memo: 'レシートから自動登録（支払先：' + (entry.vendor || '—') + '）。耐用年数・事業割合は要確認。',
+      opening: '', override: '', source: 'receipt'
+    };
+    assetsOf(y).push(a);
+    persist();
+    toast('固定資産台帳に「' + name + '」を登録しました（税務診断タブで確認してください）');
   }
   function depRestore() {
   }
