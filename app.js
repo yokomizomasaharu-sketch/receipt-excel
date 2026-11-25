@@ -3239,7 +3239,8 @@
     renderAll();
     var ys = $('yearSelect'); if (ys) ys.value = String(state.year);
     var ri = $('rateInput'); if (ri) ri.value = state.rate;
-    toast('データを最新の状態に一新しました');
+    if (SHEET_PRESET_2026) toast('データを最新の状態に一新しました');
+    else toast('初期化しました。PC用データ（.json）またはCSV・Excelを読み込んでください');
   }
 
   /* ============================================================
@@ -4234,6 +4235,12 @@
     } catch (e) { /* noop */ }
 
     $('langSelect').value = 'jpn+eng';
+    if (!SHEET_PRESET_2026) {
+      var rn = $('resetNote');
+      if (rn) rn.innerHTML = 'この端末の登録内容をすべて消して、まっさらな状態に戻します。<b>元に戻せません</b>。戻したあとは、スマホで書き出した「PC用データ（.json）」、またはスプレッドシート・会計ソフトのCSV／Excelを読み込んでください。';
+      var rb = $('btnResetAll');
+      if (rb) rb.innerHTML = '🗑️ データを初期化する';
+    }
     renderAll();
   }
 
