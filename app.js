@@ -1278,7 +1278,7 @@
      ・定額法（平成19年4月以後取得）／一括償却（3年）／少額特例（30万円未満）
      ・タックスナップ（スプレッドシート）の計上額と並べて差を見せる
      ============================================================ */
-  var DEP_METHODS = ['定額法', '一括償却3年', '少額特例'];
+  var DEP_METHODS = ['定額法', '一括償却3年', '少額特例', '対象外（消耗品費）'];
   var DEP_RATES = {
     2: 0.500, 3: 0.333, 4: 0.250, 5: 0.200, 6: 0.167, 7: 0.143, 8: 0.125, 9: 0.112,
     10: 0.100, 11: 0.091, 12: 0.083, 13: 0.077, 14: 0.071, 15: 0.067, 16: 0.063, 17: 0.059,
@@ -1341,6 +1341,10 @@
       ordinary = 0;
       bookEnd = '';
       notes.push('取得価額が未入力のため、法定計算の金額を出せません（スプレッドシートの計上額を手入力で上書きできます）。');
+    } else if (method === '対象外（消耗品費）') {
+      ordinary = 0;
+      bookEnd = cost;
+      notes.push('減価償却せず、消耗品費で全額経費にします（事業割合を掛けた ' + yen(Math.floor(cost * pct / 100)) + '円）。この行はe-Taxの3ページ目には載せず、1ページ目の消耗品費に入れてください。取得年以外で処理するときは、事業に使い始めた年か処理の根拠を確認してください。');
     } else if (method === '少額特例') {
       ordinary = cost;
       bookEnd = 0;
@@ -1363,9 +1367,9 @@
       bookEnd = Math.max(0, cost - b4amt - ordinary);
       notes.push('一括償却資産：3年間（36ヶ月）で均等に経費化。' + (months < 12 ? '本年は' + months + 'ヶ月分。12ヶ月なら' + yen(Math.floor(cost / 3)) + '円。' : ''));
     } else {
-      if (opening > 0 && opening < cost) {
-        accum = cost - opening;
-        var rem2 = opening;
+      if (opening > 0) {
+        var rem2 = Math.min(cost, opening);
+        accum = cost - rem2;
         ordinary = Math.min(rem2, Math.floor(cost * rate * months / 12));
         bookEnd = Math.max(1, rem2 - ordinary);
       } else {
@@ -1395,7 +1399,11 @@
     var out = [];
     DEP_METHODS.forEach(function (m) {
       var c = depCalc(Object.assign({}, a, { method: m, override: '' }), y);
-      out.push({ method: m, expense: c.expense, ordinary: c.ordinary });
+      var label = m === '対象外（消耗品費）' ? '消耗品費（全額）' : m;
+      var acqC = depAcquired(a);
+      if (acqC && acqC.year < y && (m === '少額特例' || m === '対象外（消耗品費）')) label += '（取得年のみ）';
+      var amt = m === '対象外（消耗品費）' ? Math.floor(c.cost * c.pct / 100) : c.expense;
+      out.push({ method: m, label: label, expense: amt, ordinary: c.ordinary });
     });
     return out;
   }
@@ -2662,7 +2670,7 @@
     if (c.override) bits.push('<span class="dep-badge warn">必要経費算入額を手入力中（自動 ' + yen(c.autoExpense) + '）</span>');
     if (c.cost > 0) {
       var cmp = depCompare(a, state.year).map(function (x) {
-        return x.method + ' ' + yen(x.expense);
+        return (x.label || x.method) + ' ' + yen(x.expense);
       }).join(' ／ ');
       bits.push('<span class="dep-badge info">方法比較：' + cmp + '</span>');
     }
@@ -2734,7 +2742,7 @@
       '<button class="btn-ghost" data-depact="toexpense">📥 この台帳をExcel（減価償却資産台帳シート）に出す</button>' +
       depLocalButtons() +
       '</div>' +
-      '<div class="rate-note">e-Taxの画面では「資産の名称等 → 取得年月日 → 取得価額 → 償却方法 → 耐用年数 → 償却率 → 本年中の償却期間 → 本年分の普通償却費 → 事業専用割合 → 本年分の必要経費算入額 → 未償却残高」の順に並んでいます。各資産の「⧉ この行をコピー」で、その順のタブ区切りがコピーされます。金額は円未満切り捨ての概算です。実際の申告前に、取得価額と事業割合を書類で確認してください。</div>';
+      '<div class="rate-note">e-Taxの画面では「資産の名称等 → 取得年月日 → 取得価額 → 償却方法 → 耐用年数 → 償却率 → 本年中の償却期間 → 本年分の普通償却費 → 事業専用割合 → 本年分の必要経費算入額 → 未償却残高」の順に並んでいます。各資産の「⧉ この行をコピー」で、その順のタブ区切りがコピーされます。金額は円未満切り捨ての概算です。<br>少額特例・消耗品費の一括計上は、原則として取得した年（事業に使い始めた年）の処理です。年をまたぐ資産は、前年末未償却残高と償却方法を確認してから申告してください。</div>';
   }
 
   function depLocalButtons() {
@@ -2992,7 +3000,9 @@
       return '<div class="board-sec"><h4>減価償却費の計算（3ページ目）</h4><div class="empty" style="padding:12px 4px;font-size:11.5px;">資産が未登録です。税務診断タブの「減価償却リスト」で追加するか、下の「＋ 資産を追加」から入れてください。</div></div>';
     }
     var head = '<thead><tr><th>資産の名称等</th><th>取得年月日</th><th>取得価額</th><th>償却方法</th><th>耐用年数</th><th>償却率</th><th>償却期間</th><th>普通償却費</th><th>事業割合</th><th>算入額</th><th>未償却残高</th><th></th></tr></thead>';
-    var body = s.rows.map(function (r) {
+    var inTable = s.rows.filter(function (r) { return r.c.method !== '対象外（消耗品費）'; });
+    var outside = s.rows.filter(function (r) { return r.c.method === '対象外（消耗品費）'; });
+    var body = inTable.map(function (r) {
       var a = r.a, c = r.c;
       return '<tr>' +
         '<td>' + esc(a.name || '（名称なし）') + '</td>' +
@@ -3009,9 +3019,14 @@
         '<td><button class="copy-btn" data-copyrow="' + esc(a.id) + '" aria-label="この行をコピー">⧉</button></td>' +
         '</tr>';
     }).join('');
-    body += '<tr style="background:#f8fafc;font-weight:700;"><td colspan="7">合計</td><td class="num">' + s.ordinary.toLocaleString('ja-JP') + '</td><td></td><td class="num" style="color:#0284c7;">' + s.expense.toLocaleString('ja-JP') + '</td><td colspan="2"></td></tr>';
+    var sumOrd = inTable.reduce(function (a, r) { return a + r.c.ordinary; }, 0);
+    var sumExp = inTable.reduce(function (a, r) { return a + r.c.expense; }, 0);
+    body += '<tr style="background:#f8fafc;font-weight:700;"><td colspan="7">合計</td><td class="num">' + sumOrd.toLocaleString('ja-JP') + '</td><td></td><td class="num" style="color:#0284c7;">' + sumExp.toLocaleString('ja-JP') + '</td><td colspan="2"></td></tr>';
+    var outNote = outside.length ? '<div class="pc-note" style="background:#fffcf3;border-color:#f2e6c9;color:#7a5316;">' + outside.map(function (r) {
+      return '<b>' + esc(r.a.name || '資産') + '</b> は消耗品費で処理（' + yen(Math.floor(r.c.cost * r.c.pct / 100)) + '）。3ページ目には載せず、1ページ目の消耗品費に入れてください。';
+    }).join('<br>') + '</div>' : '';
     return '<div class="board-sec"><h4>減価償却費の計算（3ページ目）</h4>' +
-      '<div class="dep-wrap"><table class="dep" style="min-width:860px;font-size:10.5px;">' + head + '<tbody>' + body + '</tbody></table></div>' +
+      '<div class="dep-wrap"><table class="dep" style="min-width:860px;font-size:10.5px;">' + head + '<tbody>' + body + '</tbody></table></div>' + outNote +
       '<div class="rate-note">「⧉」は e-Tax の並び（資産名→取得年月→取得価額→償却方法→耐用年数→償却率→償却期間→普通償却費→事業割合→算入額→未償却残高）でコピーします。金額を直したいときは税務診断タブの台帳で編集してください。</div></div>';
   }
 
