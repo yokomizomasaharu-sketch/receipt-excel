@@ -26,15 +26,7 @@
   var TRIP_CATEGORIES = ['航空券', 'ホテル', '交通費', '食費・買い物', 'その他'];
   var TAX_TYPES = ['', '10%', '8%軽減', '非課税', '対象外'];
 
-  var TRIP_PRESETS = [
-    { date: '2026-11-14', vendor: 'Trip.com（WE514＋TW307）', category: '航空券', currency: 'JPY', amount: 36760, taxType: '', memo: '航空券（往復）／パラタ航空 WE514 関空17:35→仁川19:35、トリニティ航空 TW307 仁川20:20→関空22:10' },
-    { date: '2026-11-14', vendor: '東横INN仁川富平（免税返金後）', category: 'ホテル', currency: 'KRW', amount: 64450, taxType: '', memo: '1泊・1名・朝食付き／67,450₩ − 免税返金3,000₩' },
-    { date: '2026-11-14', vendor: '南海電鉄 ⇔ 関西空港（往復）', category: '交通費', currency: 'JPY', amount: 2000, taxType: '', memo: '往復（推定）' },
-    { date: '2026-11-14', vendor: 'AREX直通（往路・Klook）', category: '交通費', currency: 'JPY', amount: 1359, taxType: '', memo: '仁川空港T1 → ソウル駅' },
-    { date: '2026-11-15', vendor: 'AREX直通（復路・Klook）', category: '交通費', currency: 'JPY', amount: 1359, taxType: '', memo: 'ソウル駅 → 仁川空港T1' },
-    { date: '2026-11-14', vendor: '気候同行カード 2日券', category: '交通費', currency: 'KRW', amount: 8000, taxType: '', memo: 'ソウル市内の地下鉄・バス乗り放題（実物カード代3,000₩は含まず）' },
-    { date: '2026-11-14', vendor: '地下鉄1号線 ソウル駅⇔富平', category: '交通費', currency: 'KRW', amount: 3600, taxType: '', memo: '往復 1,800₩×2（富平は気候同行カード対象エリア外）' }
-  ];
+  var TRIP_PRESETS = [];
 
   /* ---------- 状態 ---------- */
   var state = {
@@ -43,12 +35,15 @@
     rate: DEFAULT_RATE,
     trip: [],
     ledgers: {},     /* { '2026': [entry] } */
-    sales: {},       /* { '2026': 41683 } */
+    sales: {},       /* { '2026': 年間売上 } */
     blue: {},        /* { '2026': 650000 } */
     slips: {},       /* { '2026': [slip] } 複数枚OK */
     ded: {},         /* { '2026': { socialExtra, ideco, lifeGenNew, ... } } 所得控除の詳細 */
     deductions: {},  /* 旧：所得控除合計の手入力（v3以前。現在は使わない） */
     checks: {},      /* { '2026': { prep: true } } */
+    assets: {},      /* { '2026': [減価償却資産] } 固定資産台帳 */
+    revs: {},        /* { '2026': [{date, amount, memo}] } 売上の内訳（月別売上用） */
+    sheet2026Applied: false,
     presetApplied: false,
     drafts: []
   };
@@ -85,6 +80,9 @@
           if (d.deductions && typeof d.deductions === 'object') state.deductions = d.deductions;
           if (d.ded && typeof d.ded === 'object') state.ded = d.ded;
           if (d.checks && typeof d.checks === 'object') state.checks = d.checks;
+          if (d.assets && typeof d.assets === 'object') state.assets = d.assets;
+          if (d.revs && typeof d.revs === 'object') state.revs = d.revs;
+          state.sheet2026Applied = !!d.sheet2026Applied;
           state.presetApplied = !!d.presetApplied;
           if (d.mode === 'tax' || d.mode === 'trip' || d.mode === 'risk' || d.mode === 'guide') state.mode = d.mode;
           if (typeof d.year === 'number' && d.year >= 2000 && d.year <= 2100) state.year = d.year;
@@ -116,6 +114,7 @@
       v: 3, mode: state.mode, year: state.year, rate: state.rate, trip: state.trip,
       ledgers: state.ledgers, sales: state.sales, blue: state.blue,
       slips: state.slips, ded: state.ded, checks: state.checks,
+      assets: state.assets, revs: state.revs, sheet2026Applied: state.sheet2026Applied,
       presetApplied: state.presetApplied
     };
     try {
@@ -158,6 +157,18 @@
     var k = ykey(y);
     if (!state.checks[k] || typeof state.checks[k] !== 'object') state.checks[k] = {};
     return state.checks[k];
+  }
+  /* 減価償却リスト（固定資産台帳）*/ 
+  function assetsOf(y) {
+    var k = ykey(y);
+    if (!Array.isArray(state.assets[k])) state.assets[k] = [];
+    return state.assets[k];
+  }
+  /* 売上の内訳（月別売上の入力用） */
+  function revsOf(y) {
+    var k = ykey(y);
+    if (!Array.isArray(state.revs[k])) state.revs[k] = [];
+    return state.revs[k];
   }
 
   /* 所得控除の詳細（年度ごと）。数値はすべて「支払額」か「控除額」で入る */
@@ -289,7 +300,10 @@
     renderEntries();
     renderListFooter();
     renderRiskInputs();
+    renderDep();
     renderRiskResults();
+    renderFilings();
+    renderMyna();
     renderGuide();
   }
 
@@ -300,7 +314,7 @@
       tax: ['🧾 領収書スキャン', '撮影するだけで自動で表に整理・Excel出力'],
       trip: ['🇰🇷 ソウル旅行 費用', '11/14〜15 1泊2日｜現地レシートを読み取って総額を自動集計'],
       risk: ['🛡️ 税務リスク診断', '調査で指摘されやすい項目を自動で洗い出し・源泉徴収票と損益通算'],
-      guide: ['📋 e-Tax 青色申告ガイド', 'スマホを見ながらそのまま操作・数字の転記先がわかる']
+      guide: ['🖥️ PC版e-Tax 入力ナビ', 'PCの画面どおりに進める・数字をコピー・マイナポータル連携']
     };
     var t = titles[m] || titles.tax;
     $('appTitle').textContent = t[0];
@@ -318,7 +332,7 @@
     $('exportTitle').textContent = trip ? '📥 ソウル旅行のExcel出力' : '📥 Excel出力';
     $('exportNote').innerHTML = trip
       ? 'シート「ソウル旅行費用明細」＋「カテゴリ別集計」。円建て・ウォン建てを円換算して合算します。'
-      : 'シート「領収書明細」＋「科目別集計」＋「税務チェック」＋「確定申告サマリー」。金額はSUM数式入りで、そのまま計算・並べ替えできます。';
+      : 'シート「領収書明細」＋「科目別集計」＋「税務チェック」＋「税務診断・源泉」＋「確定申告サマリー」＋「減価償却資産台帳」。金額はSUM数式入りで、そのまま計算・並べ替えできます。';
     $('stickyLabel').textContent = trip ? 'ソウル旅行 総合計' : '合計金額（税込）';
 
     Array.prototype.forEach.call(document.querySelectorAll('.mode-tab'), function (b) {
@@ -1256,6 +1270,201 @@
       byForm[f] = (byForm[f] || 0) + a;
     });
     return { expenses: expenses, dokujuu: dokujuu, byForm: byForm, byRaw: byRaw, rawCount: rawCount, count: cnt };
+  }
+
+  /* ============================================================
+     減価償却リスト（固定資産台帳）
+     ・e-Tax 青色申告決算書3ページ目「減価償却費の計算」と同じ列
+     ・定額法（平成19年4月以後取得）／一括償却（3年）／少額特例（30万円未満）
+     ・タックスナップ（スプレッドシート）の計上額と並べて差を見せる
+     ============================================================ */
+  var DEP_METHODS = ['定額法', '一括償却3年', '少額特例'];
+  var DEP_RATES = {
+    2: 0.500, 3: 0.333, 4: 0.250, 5: 0.200, 6: 0.167, 7: 0.143, 8: 0.125, 9: 0.112,
+    10: 0.100, 11: 0.091, 12: 0.083, 13: 0.077, 14: 0.071, 15: 0.067, 16: 0.063, 17: 0.059,
+    18: 0.056, 19: 0.053, 20: 0.050
+  };
+  function depRateOf(a) {
+    var r = Number(a && a.rate);
+    if (r > 0) return r;
+    var life = Number(a && a.life);
+    return DEP_RATES[life] || 0.200;
+  }
+  function depAcquired(a) {
+    var m = String((a && a.acquired) || '').match(/(\d{4})\D{0,2}(\d{1,2})/);
+    if (!m) return null;
+    var mo = Number(m[2]);
+    if (!(mo >= 1 && mo <= 12)) return null;
+    return { year: Number(m[1]), month: mo };
+  }
+  function depMonthsOf(a, y) {
+    var m = Number(a && a.months);
+    if (m > 0) return Math.max(0, Math.min(12, m));
+    var acq = depAcquired(a);
+    if (acq) {
+      if (acq.year === y) return 13 - acq.month;
+      if (acq.year > y) return 0;
+    }
+    return 12;
+  }
+  function depFirstMonths(a, acq) {
+    var m = Number(a && a.months);
+    if (m > 0) return Math.max(0, Math.min(12, m));
+    return acq ? (13 - acq.month) : 12;
+  }
+  function depAccumBefore(a, y, cost, rate) {
+    var acq = depAcquired(a);
+    if (!acq || cost <= 0) return 0;
+    var total = 0;
+    for (var yy = acq.year; yy < y; yy += 1) {
+      var m = (yy === acq.year) ? (13 - acq.month) : 12;
+      total += Math.floor(cost * rate * m / 12);
+      if (total >= cost - 1) return Math.max(0, cost - 1);
+    }
+    return Math.min(total, Math.max(0, cost - 1));
+  }
+  function depCalc(a, y) {
+    a = a || {};
+    if (!y) y = state.year;
+    var cost = num(a.cost);
+    var method = DEP_METHODS.indexOf(a.method) >= 0 ? a.method : '定額法';
+    var rate = depRateOf(a);
+    var months = depMonthsOf(a, y);
+    var acq = depAcquired(a);
+    var pctRaw = a.bizPct;
+    var pct = (pctRaw === '' || pctRaw === undefined || pctRaw === null) ? 100 : Math.max(0, Math.min(100, Number(pctRaw) || 0));
+    var ordinary = 0, bookEnd = '', accum = 0;
+    var opening = num(a.opening);
+    var notes = [];
+
+    if (!cost) {
+      ordinary = 0;
+      bookEnd = '';
+      notes.push('取得価額が未入力のため、法定計算の金額を出せません（スプレッドシートの計上額を手入力で上書きできます）。');
+    } else if (method === '少額特例') {
+      ordinary = cost;
+      bookEnd = 0;
+      if (cost >= 300000) notes.push('少額特例（少額減価償却資産）は取得価額30万円未満が対象です。この資産は' + yen(cost) + 'なので対象外です。');
+      else notes.push('少額特例：30万円未満の資産は取得年に全額を経費にできます（年間合計300万円まで）。');
+    } else if (method === '一括償却3年') {
+      if (cost >= 200000) notes.push('一括償却資産は取得価額20万円未満が対象です（20万円以上は定額法）。');
+      var b4m = 0, b4amt = 0;
+      if (acq) {
+        for (var yy = acq.year; yy < y; yy += 1) {
+          var mm = (yy === acq.year) ? (13 - acq.month) : 12;
+          var take = Math.min(mm, 36 - b4m);
+          if (take <= 0) break;
+          b4amt += Math.floor(cost / 36 * take);
+          b4m += take;
+        }
+      }
+      b4amt = Math.min(b4amt, cost);
+      ordinary = Math.min(Math.max(0, cost - b4amt), Math.floor(cost / 36 * months));
+      bookEnd = Math.max(0, cost - b4amt - ordinary);
+      notes.push('一括償却資産：3年間（36ヶ月）で均等に経費化。' + (months < 12 ? '本年は' + months + 'ヶ月分。12ヶ月なら' + yen(Math.floor(cost / 3)) + '円。' : ''));
+    } else {
+      if (opening > 0 && opening < cost) {
+        accum = cost - opening;
+        var rem2 = opening;
+        ordinary = Math.min(rem2, Math.floor(cost * rate * months / 12));
+        bookEnd = Math.max(1, rem2 - ordinary);
+      } else {
+        accum = depAccumBefore(a, y, cost, rate);
+        var remain = Math.max(0, cost - accum);
+        ordinary = Math.min(remain, Math.floor(cost * rate * months / 12));
+        bookEnd = Math.max(1, cost - accum - ordinary);
+      }
+      if (bookEnd === 1) notes.push('償却可能限度額（備忘価額1円）に到達。以降は償却できません。');
+      if (cost < 100000) notes.push('10万円未満なら全額を消耗品費で経費にできます（この行は定額法で計算中）。');
+    }
+    if (!acq && cost) notes.push('取得年月が未入力のため、本年中の償却期間を' + months + 'ヶ月として計算しています。');
+
+    var autoExpense = Math.floor(ordinary * pct / 100);
+    var hasOverride = !(a.override === '' || a.override === undefined || a.override === null);
+    var expense = hasOverride ? num(a.override) : autoExpense;
+
+    return {
+      cost: cost, method: method, rate: rate, months: months, pct: pct, acq: acq,
+      opening: opening, ordinary: ordinary, autoExpense: autoExpense, expense: expense, bookEnd: bookEnd,
+      accumBefore: accum, override: hasOverride, notes: notes
+    };
+  }
+  /* 比較用：同じ資産を3つの方法で計算したときの本年分 */
+  function depCompare(a, y) {
+    if (!y) y = state.year;
+    var out = [];
+    DEP_METHODS.forEach(function (m) {
+      var c = depCalc(Object.assign({}, a, { method: m, override: '' }), y);
+      out.push({ method: m, expense: c.expense, ordinary: c.ordinary });
+    });
+    return out;
+  }
+  function depNorm(s) { return String(s || '').toUpperCase().replace(/[\s　]/g, ''); }
+  function depTaxsnapRows(y) {
+    if (!y) y = state.year;
+    var rows = [];
+    taxList(y).forEach(function (e) {
+      if ((e.category || '') !== '減価償却費') return;
+      var t = String(e.vendor || e.memo || '');
+      var m = t.match(/減価償却[（(]([^）)]*)[）)]/);
+      rows.push({ name: m ? m[1] : t, amount: yenOf(e), entry: e });
+    });
+    return rows;
+  }
+  function depTaxsnapFor(a, rows) {
+    var key = depNorm(a.matchKey || a.name);
+    if (!key) return null;
+    var hit = null;
+    rows.forEach(function (r) {
+      if (hit) return;
+      var k = depNorm(r.name);
+      if (!k) return;
+      if (k === key || k.indexOf(key) >= 0 || key.indexOf(k) >= 0) { hit = r; return; }
+      var toks = key.match(/[A-Z0-9\-]{5,}/g) || [];
+      if (toks.some(function (tk) { return k.indexOf(tk) >= 0; })) hit = r;
+    });
+    return hit;
+  }
+  function depSummary(y) {
+    if (!y) y = state.year;
+    var list = assetsOf(y);
+    var tsRows = depTaxsnapRows(y);
+    var out = { count: list.length, cost: 0, ordinary: 0, expense: 0, taxsnap: 0, diff: 0, missing: [], rows: [], overridden: 0 };
+    list.forEach(function (a) {
+      var c = depCalc(a, y);
+      var ts = depTaxsnapFor(a, tsRows);
+      out.cost += c.cost;
+      out.ordinary += c.ordinary;
+      out.expense += c.expense;
+      if (!c.cost) out.missing.push(a.name || '（名称未入力）');
+      if (c.override) out.overridden += 1;
+      out.rows.push({ a: a, c: c, taxsnap: ts });
+    });
+    tsRows.forEach(function (r) { out.taxsnap += r.amount; });
+    out.diff = out.expense - out.taxsnap;
+    return out;
+  }
+  /* 経費帳の地代家賃内訳（e-Tax 2ページ目「地代家賃の内訳」用） */
+  function rentBreakdown(y) {
+    if (!y) y = state.year;
+    var map = {};
+    taxList(y).forEach(function (e) {
+      if ((e.category || '') !== '地代家賃') return;
+      var k = e.vendor || '（支払先なし）';
+      if (!map[k]) map[k] = { n: 0, sum: 0 };
+      map[k].n += 1;
+      map[k].sum += yenOf(e);
+    });
+    return Object.keys(map).map(function (k) { return { vendor: k, n: map[k].n, sum: map[k].sum }; }).sort(function (a, b) { return b.sum - a.sum; });
+  }
+  function monthlySales(y) {
+    if (!y) y = state.year;
+    var m = new Array(13).fill(0);
+    revsOf(y).forEach(function (r) {
+      var mo = Number(String(r.date || '').slice(5, 7));
+      if (mo >= 1 && mo <= 12) m[mo] += num(r.amount);
+    });
+    return m;
   }
 
   /* ---------- 税制（年度別） ---------- */
@@ -2429,116 +2638,285 @@
   /* ============================================================
      e-Taxガイド
      ============================================================ */
-  function guideSteps() {
+  /* ============================================================
+     減価償却リスト（固定資産台帳）の表示
+     ============================================================ */
+  function depField(a, f, type, cls, ph) {
+    var v = a[f];
+    if (v === undefined || v === null) v = '';
+    if (type === 'number') {
+      return '<input class="dep-in ' + cls + '" type="number" inputmode="numeric" min="0" step="1" data-dep="' + esc(a.id) + '" data-f="' + f + '" value="' + esc(v) + '" placeholder="' + esc(ph || '') + '">';
+    }
+    return '<input class="dep-in ' + cls + '" type="text" data-dep="' + esc(a.id) + '" data-f="' + f + '" value="' + esc(v) + '" placeholder="' + esc(ph || '') + '">';
+  }
+
+  function depNoteRowHTML(r) {
+    var a = r.a, c = r.c, ts = r.taxsnap;
+    var bits = [];
+    if (ts) {
+      var d = c.expense - ts.amount;
+      bits.push('<span class="dep-badge ' + (d === 0 ? 'ok' : 'warn') + '">スプレッドシート ' + yen(ts.amount) + '／差 ' + (d === 0 ? '0円' : (d > 0 ? '+' : '−') + yen(Math.abs(d))) + '</span>');
+    } else {
+      bits.push('<span class="dep-badge info">スプレッドシート計上なし</span>');
+    }
+    if (c.override) bits.push('<span class="dep-badge warn">必要経費算入額を手入力中（自動 ' + yen(c.autoExpense) + '）</span>');
+    if (c.cost > 0) {
+      var cmp = depCompare(a, state.year).map(function (x) {
+        return x.method + ' ' + yen(x.expense);
+      }).join(' ／ ');
+      bits.push('<span class="dep-badge info">方法比較：' + cmp + '</span>');
+    }
+    var notes = c.notes.slice();
+    if (a.memo) notes.push('メモ：' + a.memo);
+    return '<tr class="dep-note-row" data-noterow="' + esc(a.id) + '"><td colspan="12">' +
+      '<div>' + bits.join(' ') + '</div>' +
+      (notes.length ? '<div style="margin-top:3px;">' + notes.map(function (n) { return '・' + esc(n); }).join('<br>') + '</div>' : '') +
+      '<div class="dep-note-in">' +
+      '<span style="font-size:10px;color:#6b7280;">前年末未償却残高</span>' +
+      '<input class="dep-in dep-ov" type="number" inputmode="numeric" min="0" data-dep="' + esc(a.id) + '" data-f="opening" value="' + esc(a.opening === undefined || a.opening === null ? '' : a.opening) + '" placeholder="' + (c.cost && c.accumBefore ? c.cost - c.accumBefore : '任意') + '">' +
+      '<span style="font-size:10px;color:#6b7280;">算入額の手入力</span>' +
+      '<input class="dep-in dep-ov" type="number" inputmode="numeric" min="0" data-dep="' + esc(a.id) + '" data-f="override" value="' + esc(a.override === undefined || a.override === null ? '' : a.override) + '" placeholder="' + (c.cost ? c.autoExpense : '—') + '">' +
+      '<button class="mini-btn" data-depact="copy" data-id="' + esc(a.id) + '">⧉ この行をコピー</button>' +
+      '<button class="mini-btn" data-depact="del" data-id="' + esc(a.id) + '" style="color:#b91c1c;border-color:#fecaca;">🗑️ 削除</button>' +
+      '</div></td></tr>';
+  }
+
+  function depRowHTML(r) {
+    var a = r.a, c = r.c;
+    var methodSel = DEP_METHODS.map(function (m) {
+      return '<option value="' + m + '"' + (c.method === m ? ' selected' : '') + '>' + m + '</option>';
+    }).join('');
+    return '<tr class="dep-row" data-row="' + esc(a.id) + '">' +
+      '<td data-label="資産の名称等">' + depField(a, 'name', 'text', 'name', '例：ノートパソコン') + '</td>' +
+      '<td data-label="取得年月日">' + depField(a, 'acquired', 'text', '', '2026-03') + '</td>' +
+      '<td data-label="取得価額">' + depField(a, 'cost', 'number', 'money', '0') + '</td>' +
+      '<td data-label="償却方法"><select class="dep-in" data-dep="' + esc(a.id) + '" data-f="method">' + methodSel + '</select></td>' +
+      '<td data-label="耐用年数">' + depField(a, 'life', 'number', '', '5') + '</td>' +
+      '<td data-label="償却率">' + depField(a, 'rate', 'number', '', '0.200') + '</td>' +
+      '<td data-label="本年中の償却期間">' + depField(a, 'months', 'number', '', '12') + '</td>' +
+      '<td data-label="本年分の普通償却費" class="num calc"><span class="dep-calc" data-outof="' + esc(a.id) + ':ordinary">' + (c.cost ? yen(c.ordinary) : '—') + '</span></td>' +
+      '<td data-label="事業専用割合">' + depField(a, 'bizPct', 'number', '', '100') + '</td>' +
+      '<td data-label="本年分の必要経費算入額" class="num calc"><span class="dep-calc" data-outof="' + esc(a.id) + ':expense" style="color:#0284c7;">' + (c.cost ? yen(c.expense) : '—') + '</span></td>' +
+      '<td data-label="期末未償却残高" class="num calc"><span class="dep-calc" data-outof="' + esc(a.id) + ':bookEnd">' + (c.cost ? yen(c.bookEnd) : '—') + '</span></td>' +
+      '<td data-label="メモ">' + depField(a, 'memo', 'text', 'memo', '摘要（例：措置法28条の2）') + '</td>' +
+      '</tr>' + depNoteRowHTML(r);
+  }
+
+  function depSummaryHTML(s) {
+    var diffTxt = s.diff === 0 ? '±0円' : ((s.diff > 0 ? '+' : '−') + yen(Math.abs(s.diff)));
+    return '<div class="dep-sum" id="depSum">' +
+      '<div class="dep-kpi"><div class="l">資産数</div><div class="v">' + s.count + '件</div><div class="n">取得価額 ' + yen(s.cost) + '</div></div>' +
+      '<div class="dep-kpi"><div class="l">本年分の普通償却費</div><div class="v">' + yen(s.ordinary) + '</div><div class="n">事業専用割合を掛ける前</div></div>' +
+      '<div class="dep-kpi"><div class="l">必要経費算入額（台帳合計）</div><div class="v" style="color:#0284c7;">' + yen(s.expense) + '</div><div class="n">e-Tax 3ページ目の合計</div></div>' +
+      '<div class="dep-kpi' + (s.diff ? ' amber' : '') + '"><div class="l">経費帳の減価償却費</div><div class="v">' + yen(s.taxsnap) + '</div><div class="n">差 ' + diffTxt + (s.overridden ? '／手入力 ' + s.overridden + '件' : '') + '</div></div>' +
+      (s.missing.length ? '<div class="dep-kpi full amber"><div class="l">取得価額が未入力</div><div class="v" style="font-size:12px;">' + s.missing.map(esc).join('、') + '</div><div class="n">分かっている範囲で入れると、法定計算と比較できます（空欄でも台帳は保存されます）。</div></div>' : '') +
+      '</div>';
+  }
+
+  function renderDep() {
+    var box = $('depBody');
+    if (!box) return;
+    var s = depSummary();
+    var cnt = $('depCount');
+    if (cnt) cnt.textContent = s.count + '件';
+    var body = s.rows.map(depRowHTML).join('');
+    if (!s.count) {
+      body = '<tr><td colspan="12" style="text-align:center;padding:18px 8px;color:#9ca3af;font-size:12px;line-height:1.6;">まだ資産が登録されていません。<br>「＋ 資産を追加」から、e-Taxの3ページ目と同じ並びで入力できます。</td></tr>';
+    }
+    box.innerHTML = depSummaryHTML(s) +
+      '<div class="dep-wrap"><table class="dep"><thead><tr>' +
+      '<th>資産の名称等</th><th>取得年月日</th><th>取得価額</th><th>償却方法</th><th>耐用年数</th><th>償却率</th><th>本年中の<br>償却期間</th><th>本年分の<br>普通償却費</th><th>事業専用<br>割合(%)</th><th>本年分の必要<br>経費算入額</th><th>期末未<br>償却残高</th><th>メモ</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table></div>' +
+      '<div class="scroll-hint">📱 スマホでは横にスクロールできます（各項目の見出しは左に出ます）。</div>' +
+      '<div class="dep-actions">' +
+      '<button class="btn-ghost" data-depact="add">＋ 資産を追加</button>' +
+      '<button class="btn-ghost" data-depact="copyall">⧉ 台帳をTSVで全部コピー</button>' +
+      '<button class="btn-ghost" data-depact="toexpense">📥 この台帳をExcel（減価償却資産台帳シート）に出す</button>' +
+      depLocalButtons() +
+      '</div>' +
+      '<div class="rate-note">e-Taxの画面では「資産の名称等 → 取得年月日 → 取得価額 → 償却方法 → 耐用年数 → 償却率 → 本年中の償却期間 → 本年分の普通償却費 → 事業専用割合 → 本年分の必要経費算入額 → 未償却残高」の順に並んでいます。各資産の「⧉ この行をコピー」で、その順のタブ区切りがコピーされます。金額は円未満切り捨ての概算です。実際の申告前に、取得価額と事業割合を書類で確認してください。</div>';
+  }
+
+  function depLocalButtons() {
+    return '';
+  }
+
+  function depFind(id) {
+    return assetsOf().find(function (x) { return x.id === id; }) || null;
+  }
+  function depCopyRow(a) {
+    var c = depCalc(a, state.year);
+    var v = [a.name || '', a.acquired || '', c.cost || '', c.method, a.life || '', c.rate ? c.rate.toFixed(3) : '', String(c.months), String(c.ordinary), String(c.pct), String(c.expense), String(c.bookEnd === '' ? '' : c.bookEnd)];
+    copyText(v.join('\t'), '「' + (a.name || '資産') + '」の行をコピーしました（e-Taxの同じ順に貼り付け）');
+  }
+  function depCopyAll() {
+    var s = depSummary();
+    if (!s.count) { toast('資産がまだありません', true); return; }
+    var lines = [['資産の名称等', '取得年月日', '取得価額', '償却方法', '耐用年数', '償却率', '本年中の償却期間', '本年分の普通償却費', '事業専用割合', '本年分の必要経費算入額', '未償却残高', 'メモ'].join('\t')];
+    s.rows.forEach(function (r) {
+      var a = r.a, c = r.c;
+      lines.push([a.name || '', a.acquired || '', c.cost || '', c.method, a.life || '', c.rate ? c.rate.toFixed(3) : '', c.months, c.ordinary, c.pct, c.expense, c.bookEnd === '' ? '' : c.bookEnd, (a.memo || '').replace(/\t/g, ' ')].join('\t'));
+    });
+    copyText(lines.join('\n'), '減価償却リストをTSVでコピーしました');
+  }
+  function depNewAsset() {
+    var a = { id: 'dep-' + uid(), name: '', acquired: '', cost: '', method: '定額法', life: 5, rate: DEP_RATES[5], months: 12, bizPct: 100, memo: '', opening: '', override: '', source: 'manual' };
+    assetsOf().push(a);
+    persist();
+    renderDep();
+    var el = document.querySelector('[data-row="' + a.id + '"] [data-f="name"]');
+    if (el) el.focus();
+  }
+  function depRestore() {
+  }
+  function refreshDepLive(id) {
+    var a = depFind(id);
+    if (!a) return;
     var y = state.year;
-    var yj = reiwa(y);
-    var js = '令和' + yj + '年分';
+    var c = depCalc(a, y);
+    function put(k, val) {
+      var el = document.querySelector('[data-outof="' + id + ':' + k + '"]');
+      if (el) el.textContent = c.cost ? val : '—';
+    }
+    put('ordinary', yen(c.ordinary));
+    put('expense', yen(c.expense));
+    put('bookEnd', yen(c.bookEnd));
+    var s = depSummary();
+    var sum = $('depSum');
+    if (sum) {
+      var tmp = document.createElement('div');
+      tmp.innerHTML = depSummaryHTML(s);
+      if (sum.parentNode) sum.parentNode.replaceChild(tmp.firstChild, sum);
+    }
+    var note = document.querySelector('[data-noterow="' + id + '"]');
+    if (note && document.activeElement !== note.querySelector('[data-f="override"]')) {
+      var r = { a: a, c: c, taxsnap: depTaxsnapFor(a, depTaxsnapRows(y)) };
+      var tmp2 = document.createElement('tbody');
+      tmp2.innerHTML = depNoteRowHTML(r);
+      var fresh = tmp2.firstChild;
+      if (fresh) note.parentNode.replaceChild(fresh, note);
+    }
+    var cnt = $('depCount');
+    if (cnt) cnt.textContent = s.count + '件';
+  }
+  function depInputHandler(ev) {
+    var el = ev.target.closest('[data-dep]');
+    if (!el) return;
+    var a = depFind(el.getAttribute('data-dep'));
+    if (!a) return;
+    var f = el.getAttribute('data-f');
+    var isNum = el.type === 'number';
+    a[f] = isNum ? (el.value === '' ? '' : Math.max(0, Number(el.value))) : el.value;
+    if (f === 'life' && isNum && Number(el.value) > 0) {
+      a.rate = DEP_RATES[Number(el.value)] || a.rate;
+      var rateEl = document.querySelector('[data-dep="' + a.id + '"][data-f="rate"]');
+      if (rateEl) rateEl.value = a.rate;
+    }
+    if (f === 'acquired') {
+      var acq = depAcquired(a);
+      if (acq && acq.year === state.year) {
+        var mEl = document.querySelector('[data-dep="' + a.id + '"][data-f="months"]');
+        if (mEl && !Number(a.months)) { /* keep */ }
+      }
+    }
+    persist();
+    refreshDepLive(a.id);
+    if (f === 'method' || f === 'life') renderBoard();
+  }
+
+  /* ============================================================
+     PC版e-Tax 画面どおり入力ナビ
+     ============================================================ */
+  function guideLocalNotes(id) {
+    return '';
+  }
+
+  function pcSteps() {
+    var y = state.year;
+    var js = '令和' + reiwa(y) + '年分';
     return [
       {
-        id: 'prep', ico: '🧰', title: '事前準備', sub: 'マイナンバーカード・源泉徴収票・1年分の集計',
+        id: 'start', no: 1, ico: '🚪', title: '作成コーナーを開いて「作成開始」', sub: '決算書・収支内訳書（＋所得税）を選ぶところまで',
         items: [
-          ['マイナンバーカードの電子証明書の有効期限を確認', '期限が切れていると送信できません。更新は市区町村の窓口で（無料）。'],
-          ['読み取り方法を決める', 'NFC対応のスマホなら、マイナポータルアプリまたは作成コーナーの「スマホで読み取り」でカードリーダーは不要です。'],
-          ['利用者識別番号を控えておく', '初回は作成コーナーの「利用者識別番号の発行」から取得します。2回目以降は入力するだけです。'],
-          ['青色申告承認申請書が出ているか確認', '提出は開業から2か月以内、または前年3月15日まで。出ていないと青色申告（65万円控除）は使えません。'],
-          ['源泉徴収票を用意（前職分も）', '①支払金額 ②給与所得控除後の金額 ③所得控除の額の合計額 ④源泉徴収税額 の4つを使います。'],
-          ['1年分の売上と経費を締める', 'このアプリの「Excel出力」で書き出し、税務診断タブの赤・黄を潰しておきます。'],
-          ['マイナポータル連携（任意だけどおすすめ）', '社会保険料・医療費・ふるさと納税の控除証明を自動で取得できます。一度連携すれば翌年も使えます。']
+          { t: '用意するもの', d: 'マイナンバーカード（利用者証明用パスワード4桁・署名用6〜16桁）、スマホのマイナポータルアプリ、源泉徴収票、控除証明書、昨年の申告データ（.data）', path: '' },
+          { t: '「作成開始」を押す', d: '確定申告書等作成コーナー（keisan.nta.go.jp）のトップで「作成開始」→ 注意事項の画面で「次へ」。', path: '作成開始' },
+          { t: '作るものを選ぶ', d: '「作成する申告書等の選択」で年分「' + js + '」→「決算書・収支内訳書（＋所得税）」。ここが大事です（「所得税」から入ると決算書が作れません）。', path: '決算書・収支内訳書（＋所得税）' },
+          { t: '提出方法に答える', d: '「マイナンバーカードをお持ちですか」→はい／「スマホで読み取れますか」→はい／マイナポータル連携→「利用する」（任意）。', path: 'e-Tax（マイナンバーカード方式）' },
+          { t: 'カードを読み取る', d: 'PC画面のQRコードをスマホで読むか、ICカードリーダーで読み取り。利用者証明用パスワード（4桁）を入力。初めてなら利用者識別番号を発行して控えます。', path: 'マイナンバーカード読取' },
+          { t: '昨年のデータを引き継ぐ', d: 'トップの「保存データを利用して作成」から .data を選ぶと、住所・氏名・利用者識別番号・前年末未償却残高が入った状態で始められます。', path: '保存データを利用して作成' }
         ],
-        tip: '12月のうちに領収書を読み終えておくと、2月は「画面に数字を写すだけ」で終わります。'
+        tip: 'PCでは Ctrl＋F（Macは ⌘＋F）で画面内の項目名を検索できます。ブラウザの「戻る」は使わず、画面の「前へ」で戻ってください。',
+        board: ''
       },
       {
-        id: 'step1', ico: '1️⃣', title: 'ステップ1：青色申告決算書をつくる', sub: '売上 → 経費 → 特別控除 → 所得金額',
+        id: 'page1', no: 2, ico: '1️⃣', title: '青色申告決算書 1ページ目（損益計算書）', sub: '売上 → 経費19科目 → 青色申告特別控除',
         items: [
-          ['「作成開始」→「所得税」→「' + js + '」→「青色申告決算書から作成」', '決算書から作ると、所得金額が確定申告書へ自動で引き継がれます。'],
-          ['売上（収入）金額を入れる', '売上先が2件までなら直接入力。3件以上は「売上（収入）金額の内訳」を開いて入力します。'],
-          ['売上原価を入れる', '期首商品棚卸高・仕入金額・期末商品棚卸高。モノを仕入れない（制作・サービス）なら0のままで大丈夫です。'],
-          ['経費を科目ごとに入れる', 'e-Taxガイドの転記ボードの金額をそのまま写します。給料賃金・地代家賃・専従者給与は内訳の入力が求められます。'],
-          ['青色申告特別控除額を選ぶ', '65万円／55万円／10万円。65万円は「e-Tax送信＋電子帳簿保存」が条件です。迷ったら55万円が安全です。'],
-          ['所得金額が赤字でも0にしない', 'マイナスのまま進みます。ここを0にすると給与所得との損益通算ができなくなります。'],
-          ['2ページ目を埋める', '月別の売上・仕入、減価償却費の計算、地代家賃の内訳、専従者給与の内訳。']
+          { t: '売上（収入）金額', d: '売上先が2件までなら直接入力。3件以上は「売上（収入）金額の内訳」を開いて入力します。', path: '売上（収入）金額' },
+          { t: '売上原価', d: '期首商品棚卸高・仕入金額・期末商品棚卸高。モノを仕入れないなら0のままでOK（仕入高がある年はその金額）。', path: '売上原価' },
+          { t: '経費を科目ごとに転記', d: '下の「1ページ目」ボードの金額を、e-Taxの同じ科目名の欄にコピーします。会議費・新聞図書費・支払手数料は「雑費」、車両費は「旅費交通費」にまとまります。', path: '経費' },
+          { t: '減価償却費', d: '3ページ目で入力した金額が自動で入ります。ここには手入力しません。', path: '減価償却費' },
+          { t: '青色申告特別控除額', d: '65万円（e-Tax送信＋電子帳簿保存）／55万円（e-Taxのみ）／10万円。赤字で所得が少ない年は、所得金額が限度になります（自動で減額されます）。', path: '青色申告特別控除額' },
+          { t: '所得金額', d: '赤字でもマイナスのまま進めます。0にすると給与所得との損益通算ができません。', path: '所得金額' }
         ],
-        tip: '決算書の所得金額と、確定申告書の「事業所得」が一致しているか最後に必ず見比べてください。'
+        tip: '決算書の所得金額と、確定申告書の「事業所得」が一致しているか最後に見比べてください。',
+        board: 'p1'
       },
       {
-        id: 'step2', ico: '2️⃣', title: 'ステップ2：所得税の確定申告書をつくる', sub: '給与所得＋事業所得＋所得控除',
+        id: 'page2', no: 3, ico: '2️⃣', title: '決算書 2〜3ページ目（月別売上・地代家賃・減価償却）', sub: '3ページ目の「減価償却費の計算」は台帳からそのままコピー',
         items: [
-          ['給与所得を入れる', '源泉徴収票の「支払金額」と「所得控除後の金額」。2枚目（前職）は「前職分」の欄に入れます。'],
-          ['社会保険料控除を入れる', '国民年金・国民健康保険・任意継続の保険料。マイナポータル連携していれば自動で入ります。'],
-          ['その他の控除を入れる', '生命保険料・地震保険料・医療費・寄附金（ふるさと納税）・小規模企業共済等掛金。'],
-          ['税額を確認する', '課税所得→所得税→復興特別所得税は自動計算。ここで還付か納付かが決まります。'],
-          ['住民税・事業税に関する事項', '給与以外の所得があると、住民税の徴収方法（特別徴収／普通徴収）を選べます。'],
-          ['事業所得が赤字なら通算される', '第一表の「事業所得（営業等）」にマイナスで入り、給与所得と相殺されます。これが損益通算です。']
+          { t: '月別売上（収入）金額（2ページ目）', d: '1月〜12月の売上を入れます。下の「月別売上」のとおりに入れると合計が売上金額と一致します。', path: '月別売上（収入）金額' },
+          { t: '地代家賃の内訳（2ページ目）', d: '賃借人・年間賃借料・左のうち必要経費算入額。家事按分している場合は満額と按分後を分けて入れます。', path: '地代家賃の内訳' },
+          { t: '専従者給与の内訳（2ページ目）', d: '家族に給与を払っていなければ空欄のままです。', path: '専従者給与の内訳' },
+          { t: '減価償却費の計算（3ページ目）', d: '「資産の名称等」から順に、下の台帳の行をコピーして貼り付けます。行が足りなければ「明細を追加」で増やせます。', path: '減価償却費の計算' },
+          { t: '少額特例・一括償却の扱い', d: '30万円未満の資産を少額特例で全額経費にする場合も、この明細に載せて償却方法と必要経費算入額を入れます。20万円未満なら一括償却（3年）も選べます。', path: '償却方法' },
+          { t: '貸倒金・繰越損失', d: 'なければ空欄。前年からの赤字を繰り越す場合は「青色申告決算書」ではなく確定申告書の「繰越損失」で入力します。', path: '' }
         ],
-        tip: '還付になる年でも、申告しないと還付は受けられません（還付申告は' + (y + 1) + '年1月から提出できます）。'
+        tip: '「本年中の償却期間」は、取得した年は 13−取得月（3月取得なら10ヶ月）、翌年以降は12ヶ月です。',
+        board: 'dep'
       },
       {
-        id: 'step3', ico: '3️⃣', title: 'ステップ3：送信・控えの保存・納付', sub: 'マイナンバーカードで署名 → PDF保存 → 納付',
+        id: 'form', no: 4, ico: '3️⃣', title: '確定申告書 第一表・第二表', sub: '給与所得＋事業所得＋所得控除 → 税額',
         items: [
-          ['「入力内容の確認」で全項目を見る', '収入・所得・控除・税額。源泉徴収票の数字と1つずつ照合します。'],
-          ['「申告書を送信」→カードで署名', 'マイナンバーカードを読み取り、利用者証明用電子証明書のパスワード（4桁）を入力します。'],
-          ['受付番号と受付日時を控える', '送信結果の画面はPDFで保存。あとで「送信結果・照会」からも確認できます。'],
-          ['帳票一覧からPDFを保存', '申告書・青色申告決算書をダウンロードして保存。所得税の帳簿書類は7年保存（欠損金の繰越は9年）。'],
-          ['納付する', '振替納税（口座振替の登録は3月中旬まで）・e-Taxダイレクト・コンビニ納付（QR）・クレジットカード納付（手数料がかかります）。'],
-          ['還付を待つ', '登録口座へ通常3〜4週間で振込。「還付金の処理状況」で確認できます。']
+          { t: '決算書から引き継ぐ', d: '決算書の入力が終わったら「所得税の申告書作成はこちら」→「引継ぎ情報等の確認」→「所得税の申告書の作成画面へ」。事業所得が自動で入ります。', path: '所得税の申告書作成はこちら' },
+          { t: '給与所得（第一表）', d: '源泉徴収票の「支払金額」と「所得控除後の金額」。前職があれば「前職分」の欄も。下の「確定申告書」ボードの金額と照合してください。', path: '収入金額等・所得金額等' },
+          { t: '所得控除（第一表）', d: '社会保険料・生命保険料・地震保険料・医療費・寄附金・基礎控除。マイナポータル連携していれば自動で入ります。', path: '所得控除' },
+          { t: '税額と還付口座', d: '課税所得→所得税→復興特別所得税は自動計算。還付になる場合は「還付される税金」と受取口座（本人名義）を確認します。', path: '税金の計算・還付金の受取口座' },
+          { t: '第二表', d: '「所得の内訳」に給与（源泉徴収票の支払者）と事業（屋号・事業場所）を書きます。給与は源泉徴収票のとおりに転記。', path: '第二表' },
+          { t: '住民税の徴収方法', d: '給与以外の所得があると「自分で納付（普通徴収）」か「給与から差し引き（特別徴収）」を選べます。', path: '住民税・事業税に関する事項' }
         ],
-        tip: '送信は24時間できますが、期限ぎりぎりはサーバーが混みます。' + deadlineOf(y).end + 'の3日前までに送っておくと安心です。'
+        tip: '還付申告は' + (y + 1) + '年1月から提出できます。期限前でも、源泉徴収票がそろっていれば先に出せます。',
+        board: 'form'
+      },
+      {
+        id: 'send', no: 5, ico: '4️⃣', title: '送信・控え保存・納付', sub: '送信前確認 → 署名 → 受付番号 → PDFで7年保存',
+        items: [
+          { t: '入力内容の確認', d: '「入力内容の確認」で帳票イメージを表示。収入・所得・控除・税額を源泉徴収票と1つずつ照合します。', path: '入力内容の確認' },
+          { t: '申告書を送信', d: '「送信する」→「送信を実行する」。署名用電子証明書のパスワード（6〜16桁）を聞かれます。', path: '送信する' },
+          { t: '受付番号を控える', d: '「送信完了」の画面と受付番号・受付日時をメモ。e-Taxソフト（WEB版）のメッセージボックスにも届きます。', path: '送信結果の確認' },
+          { t: '控えPDFを保存', d: '「帳票一覧」から申告書・青色申告決算書をPDFで保存。所得税の帳簿書類は7年保存（欠損金の繰越は9年）。', path: '帳票一覧' },
+          { t: '納付（納税がある場合）', d: '振替納税・ダイレクト納付・コンビニ納付（QR）・クレジットカード納付（手数料あり）。振替納税の登録は3月中旬までです。', path: '納付' },
+          { t: '還付を待つ', d: '登録口座へ通常3〜4週間。「還付金の処理状況」で確認できます。', path: '' }
+        ],
+        tip: '送信は24時間できますが、期限ぎりぎりはサーバーが混みます。' + deadlineOf(y).end + 'の3日前までに送っておくと安心です。',
+        board: ''
       }
     ];
   }
 
-  function renderGuide() {
-    var stepsBox = $('guideSteps');
-    if (!stepsBox) return;
-
-    // 期限
-    var dl = deadlineOf(state.year);
-    var db = $('deadlineBox');
-    if (db) {
-      db.innerHTML = '<div class="deadline"><div class="dl-ico">🗓️</div><div class="dl-main">' +
-        '<div class="dl-title">' + yearLabel(state.year) + '分の申告期限</div>' +
-        '<div class="dl-sub">' + dl.start + ' 〜 ' + dl.end + '<br>還付申告なら' + (state.year + 1) + '年1月から提出できます。期限を過ぎると無申告加算税・延滞税の対象になります。</div>' +
-        '</div></div>';
-    }
-
-    var checks = checksOf();
-    var steps = guideSteps();
-    var doneCount = steps.filter(function (s) { return checks[s.id]; }).length;
-    var h = '<div class="card" style="padding:11px 14px;"><div class="card-title" style="margin-bottom:6px;"><span>✅ 進捗</span><span class="count">' + doneCount + ' / ' + steps.length + 'ステップ</span></div>' +
-      '<div class="bar" style="margin-top:0;"><i style="width:' + Math.round(doneCount / steps.length * 100) + '%"></i></div></div>';
-
-    steps.forEach(function (s) {
-      h += '<details class="step">' +
-        '<summary>' +
-        '<span class="step-ico">' + s.ico + '</span>' +
-        '<span class="step-main"><span class="step-title">' + esc(s.title) + '</span><span class="step-sub">' + esc(s.sub) + '</span></span>' +
-        '<button type="button" class="chk' + (checks[s.id] ? ' on' : '') + '" data-step="' + s.id + '" aria-label="完了にする">✓</button>' +
-        '</summary>' +
-        '<div class="step-body">' +
-        s.items.map(function (it, i) {
-          return '<div class="step-item"><span class="no">' + (i + 1) + '</span><span class="tx"><b>' + esc(it[0]) + '</b><span>' + esc(it[1]) + '</span></span></div>';
-        }).join('') +
-        '<div class="step-tip">💡 ' + esc(s.tip) + '</div>' +
-        '</div></details>';
-    });
-    stepsBox.innerHTML = h;
-
-    renderBoard();
+  function boardRowHTML(label, src, v, cls) {
+    var val = Math.round(Number(v) || 0);
+    return '<div class="board-row' + (cls === 'total' ? ' board-total' : '') + '">' +
+      '<div class="bl"><b>' + esc(label) + '</b><span>' + esc(src || '') + '</span></div>' +
+      '<div class="bv' + (val < 0 ? ' neg' : '') + '">' + (val < 0 ? '▲' : '') + Math.abs(val).toLocaleString('ja-JP') + '</div>' +
+      '<button class="copy-btn" data-copy="' + val + '" aria-label="コピー">⧉</button>' +
+      '</div>';
   }
 
-  function renderBoard() {
-    var box = $('board');
-    if (!box) return;
-    var y = state.year;
+  function boardP1HTML() {
     var sim = computeSim();
     var tot = totalsForYear();
-
-    var sec1 = [];
-    sec1.push({
-      label: '売上（収入）金額',
-      src: '税務診断タブの「年間の事業売上」',
-      v: sim.sales
-    });
+    var rows = [];
+    rows.push(boardRowHTML('売上（収入）金額', '税務診断タブの「年間の事業売上」', sim.sales));
     FORM_CATEGORIES.forEach(function (c) {
       if (c === '専従者給与') return;
       var v = tot.byForm[c] || 0;
@@ -2547,21 +2925,36 @@
       var n = raws.reduce(function (s, raw) { return s + (tot.rawCount[raw] || 0); }, 0);
       var src = '経費帳 ' + n + '件：' + raws.join('・');
       if (raws.length > 1) src += '（決算書では1欄にまとめます）';
-      sec1.push({ label: c, src: src, v: v });
+      if (c === '減価償却費') {
+        var ds = depSummary();
+        if (ds.count) {
+          src = '固定資産台帳の算入額合計 ' + yen(ds.expense) + '／経費帳は ' + yen(v) + '（差 ' + (ds.diff === 0 ? '±0' : (ds.diff > 0 ? '+' : '−') + yen(Math.abs(ds.diff))) + '）';
+        }
+      }
+      rows.push(boardRowHTML(c, src, v));
     });
-    sec1.push({ label: '経費計', src: '経費の合計（専従者給与を除く）', v: sim.expenses, total: true });
-    if (sim.dokujuu) sec1.push({ label: '専従者給与（事業専従者控除）', src: '経費計の下の別欄', v: sim.dokujuu });
-    sec1.push({ label: '青色申告特別控除前の所得金額', src: '自動計算（売上−経費−専従者給与）', v: sim.beforeBlue });
-    sec1.push({ label: '青色申告特別控除額', src: '選択中の控除額（65万／55万／10万）' + (sim.blueApplied < sim.blue ? '／所得を限度に減額' : ''), v: sim.blueApplied });
-    sec1.push({ label: '所得金額', src: '自動計算。赤字ならマイナスのまま', v: sim.biz, total: true });
-
-    var sec2 = [];
-    if (sim.slipCount) {
-      sec2.push({ label: '収入金額等「給与」', src: '源泉徴収票①の合計', v: sim.pay });
-      sec2.push({ label: '所得金額等「給与所得」', src: '源泉徴収票②（合算後）', v: sim.salary });
+    rows.push(boardRowHTML('経費計', '経費の合計（専従者給与を除く）', sim.expenses, 'total'));
+    if (sim.dokujuu) rows.push(boardRowHTML('専従者給与（事業専従者控除）', '経費計の下の別欄', sim.dokujuu));
+    rows.push(boardRowHTML('青色申告特別控除前の所得金額', '自動計算（売上−経費−専従者給与）', sim.beforeBlue));
+    rows.push(boardRowHTML('青色申告特別控除額', '選択中の控除額' + (sim.blueApplied < sim.blue ? '／所得を限度に減額' : ''), sim.blueApplied));
+    rows.push(boardRowHTML('所得金額', '自動計算。赤字ならマイナスのまま', sim.biz, 'total'));
+    var depWarn = '';
+    var depS = depSummary();
+    if (depS.count && depS.diff !== 0) {
+      depWarn = '<div class="pc-note" style="background:#fffcf3;border-color:#f2e6c9;color:#7a5316;"><b>先に減価償却の方法を決めてください。</b>e-Taxでは3ページ目「減価償却費の計算」の合計が1ページ目の減価償却費に自動で入ります。このアプリの固定資産台帳では <b>' + yen(depS.expense) + '</b>、経費帳（スプレッドシート）では <b>' + yen(depS.taxsnap) + '</b> で、差が <b>' + (depS.diff > 0 ? '+' : '−') + yen(Math.abs(depS.diff)) + '</b> あります。台帳の各資産のメモ（4ヶ月/12ヶ月、少額特例、一括償却など）を見て決め、経費帳側の減価償却費も同じ額にそろえてください。</div>';
     }
-    sec2.push({ label: '所得金額等「事業所得（営業等）」', src: '決算書の所得金額と同じ数字', v: sim.biz });
-    sec2.push({ label: '合計所得金額', src: '給与所得＋事業所得', v: sim.totalIncome, total: true });
+    return '<div class="board-sec"><h4>青色申告決算書 1ページ目（損益計算書）</h4>' + depWarn + rows.join('') + '</div>';
+  }
+
+  function boardFormHTML() {
+    var sim = computeSim();
+    var rows = [];
+    if (sim.slipCount) {
+      rows.push(boardRowHTML('収入金額等「給与」', '源泉徴収票①の合計', sim.pay));
+      rows.push(boardRowHTML('所得金額等「給与所得」', '源泉徴収票②（合算後）', sim.salary));
+    }
+    rows.push(boardRowHTML('所得金額等「事業所得（営業等）」', '決算書の所得金額と同じ数字', sim.biz));
+    rows.push(boardRowHTML('合計所得金額', '給与所得＋事業所得', sim.totalIncome, 'total'));
     var b = sim.breakdown;
     [['社会保険料控除', '源泉徴収票の社会保険料＋国保・年金など', b.social],
      ['小規模企業共済等掛金控除', 'iDeCo・共済掛金', b.ideco],
@@ -2576,35 +2969,402 @@
      ['その他の所得控除', '雑損控除など', b.other]
     ].forEach(function (r) {
       if (!r[2]) return;
-      sec2.push({ label: r[0], src: r[1], v: r[2] });
+      rows.push(boardRowHTML(r[0], r[1], r[2]));
     });
-    sec2.push({ label: '所得控除の額の合計', src: '上の控除の合計', v: sim.ded });
-    sec2.push({ label: '課税される所得金額', src: '自動計算（1,000円未満切り捨て）', v: sim.taxable, total: true });
-    if (sim.housing) sec2.push({ label: '住宅借入金等特別控除（税額控除）', src: '所得税から直接控除', v: sim.housing });
-    sec2.push({ label: '所得税及び復興特別所得税', src: '税率を掛けて自動計算' + (sim.housing ? '（住宅ローン控除後）' : ''), v: sim.totalTax });
-    if (sim.slipCount) sec2.push({ label: '源泉徴収税額', src: '源泉徴収票④の合計', v: sim.withheld });
-    sec2.push({
-      label: sim.diff >= 0 ? '納める税金' : '還付される税金',
-      src: '税額−源泉徴収税額', v: Math.abs(sim.diff), total: true
-    });
+    rows.push(boardRowHTML('所得控除の額の合計', '上の控除の合計', sim.ded));
+    rows.push(boardRowHTML('課税される所得金額', '自動計算（1,000円未満切り捨て）', sim.taxable, 'total'));
+    if (sim.housing) rows.push(boardRowHTML('住宅借入金等特別控除（税額控除）', '所得税から直接控除', sim.housing));
+    rows.push(boardRowHTML('所得税及び復興特別所得税', '税率を掛けて自動計算' + (sim.housing ? '（住宅ローン控除後）' : ''), sim.totalTax));
+    if (sim.slipCount) rows.push(boardRowHTML('源泉徴収税額', '源泉徴収票④の合計', sim.withheld));
+    rows.push(boardRowHTML(sim.diff >= 0 ? '納める税金' : '還付される税金', '税額−源泉徴収税額', Math.abs(sim.diff), 'total'));
 
-    function secHTML(title, rows) {
-      return '<div class="board-sec"><h4>' + esc(title) + '</h4>' + rows.map(function (r) {
-        return '<div class="board-row' + (r.total ? ' board-total' : '') + '">' +
-          '<div class="bl"><b>' + esc(r.label) + '</b><span>' + esc(r.src || '') + '</span></div>' +
-          '<div class="bv' + (r.v < 0 ? ' neg' : '') + '">' + (r.v < 0 ? '▲' : '') + Math.abs(Math.round(r.v)).toLocaleString('ja-JP') + '</div>' +
-          '<button class="copy-btn" data-copy="' + Math.round(r.v) + '" aria-label="コピー">⧉</button>' +
-          '</div>';
-      }).join('') + '</div>';
+    var rows2 = [];
+    if (sim.slipCount) rows2.push(boardRowHTML('所得の内訳「給与」', '支払者・支払金額（源泉徴収票のとおり）', sim.pay));
+    rows2.push(boardRowHTML('所得の内訳「事業」', '屋号・事業場所・所得金額', sim.biz));
+    return '<div class="board-sec"><h4>確定申告書B 第一表</h4>' + rows.join('') + '</div>' +
+      '<div class="board-sec" style="margin-top:8px;"><h4>第二表（所得の内訳）</h4>' + rows2.join('') +
+      '<div class="rate-note">第二表は「所得の内訳」のほか、社会保険料・生命保険料などの控除の内訳、住民税の徴収方法を書きます。金額は第一表と同じです。</div></div>';
+  }
+
+  function boardDepHTML() {
+    var s = depSummary();
+    if (!s.count) {
+      return '<div class="board-sec"><h4>減価償却費の計算（3ページ目）</h4><div class="empty" style="padding:12px 4px;font-size:11.5px;">資産が未登録です。税務診断タブの「減価償却リスト」で追加するか、下の「＋ 資産を追加」から入れてください。</div></div>';
+    }
+    var head = '<thead><tr><th>資産の名称等</th><th>取得年月日</th><th>取得価額</th><th>償却方法</th><th>耐用年数</th><th>償却率</th><th>償却期間</th><th>普通償却費</th><th>事業割合</th><th>算入額</th><th>未償却残高</th><th></th></tr></thead>';
+    var body = s.rows.map(function (r) {
+      var a = r.a, c = r.c;
+      return '<tr>' +
+        '<td>' + esc(a.name || '（名称なし）') + '</td>' +
+        '<td>' + esc(a.acquired || '—') + '</td>' +
+        '<td class="num">' + (c.cost ? Math.round(c.cost).toLocaleString('ja-JP') : '—') + '</td>' +
+        '<td>' + esc(c.method) + '</td>' +
+        '<td class="num">' + esc(a.life || '—') + '</td>' +
+        '<td class="num">' + (c.rate ? c.rate.toFixed(3) : '—') + '</td>' +
+        '<td class="num">' + esc(c.months) + '</td>' +
+        '<td class="num">' + Math.round(c.ordinary).toLocaleString('ja-JP') + '</td>' +
+        '<td class="num">' + esc(c.pct) + '%</td>' +
+        '<td class="num" style="font-weight:700;color:#0284c7;">' + Math.round(c.expense).toLocaleString('ja-JP') + '</td>' +
+        '<td class="num">' + (c.bookEnd === '' ? '—' : Math.round(c.bookEnd).toLocaleString('ja-JP')) + '</td>' +
+        '<td><button class="copy-btn" data-copyrow="' + esc(a.id) + '" aria-label="この行をコピー">⧉</button></td>' +
+        '</tr>';
+    }).join('');
+    body += '<tr style="background:#f8fafc;font-weight:700;"><td colspan="7">合計</td><td class="num">' + s.ordinary.toLocaleString('ja-JP') + '</td><td></td><td class="num" style="color:#0284c7;">' + s.expense.toLocaleString('ja-JP') + '</td><td colspan="2"></td></tr>';
+    return '<div class="board-sec"><h4>減価償却費の計算（3ページ目）</h4>' +
+      '<div class="dep-wrap"><table class="dep" style="min-width:860px;font-size:10.5px;">' + head + '<tbody>' + body + '</tbody></table></div>' +
+      '<div class="rate-note">「⧉」は e-Tax の並び（資産名→取得年月→取得価額→償却方法→耐用年数→償却率→償却期間→普通償却費→事業割合→算入額→未償却残高）でコピーします。金額を直したいときは税務診断タブの台帳で編集してください。</div></div>';
+  }
+
+  function boardRentHTML() {
+    var rb = rentBreakdown();
+    var rows = [];
+    rb.forEach(function (r) {
+      rows.push(boardRowHTML(r.vendor, r.n + '件の合計（事業按分後）', r.sum));
+    });
+    if (!rb.length) rows.push('<div class="empty" style="padding:10px 4px;font-size:11.5px;">地代家賃の経費がありません。</div>');
+    return '<div class="board-sec"><h4>地代家賃の内訳（2ページ目）</h4>' + rows.join('') + guideLocalNotes('page2') + '</div>';
+  }
+
+  function boardMonthHTML() {
+    var m = monthlySales();
+    var total = 0;
+    for (var i = 1; i <= 12; i += 1) total += m[i];
+    var cells = '';
+    for (var j = 1; j <= 12; j += 1) {
+      cells += '<div class="month-cell' + (m[j] ? '' : ' zero') + '" title="' + j + '月"><div class="m">' + j + '月</div><div class="a">' + (m[j] ? Math.round(m[j]).toLocaleString('ja-JP') : '0') + '</div></div>';
+    }
+    return '<div class="board-sec"><h4>月別売上（収入）金額（2ページ目）</h4>' +
+      '<div class="month-grid">' + cells + '</div>' +
+      '<div class="board-row board-total" style="margin-top:8px;"><div class="bl"><b>合計</b><span>1月〜12月の合計（売上金額と一致）</span></div><div class="bv">' + Math.round(total).toLocaleString('ja-JP') + '</div><button class="copy-btn" data-copy="' + Math.round(total) + '">⧉</button></div>' +
+      (total ? '' : '<div class="rate-note">売上の内訳が未登録です。税務診断タブの売上金額だけでも合計として使えます。</div>') +
+      '</div>';
+  }
+
+  function boardFor(key) {
+    if (key === 'p1') return '<div class="step-board"><div class="step-board-title">⧉ 1ページ目へ転記する金額<span class="count">押すとコピー</span></div>' + boardP1HTML() + '</div>';
+    if (key === 'dep') return '<div class="step-board"><div class="step-board-title">⧉ 2〜3ページ目へ転記する金額<span class="count">押すとコピー</span></div>' + boardDepHTML() + boardMonthHTML() + boardRentHTML() + '</div>';
+    if (key === 'form') return '<div class="step-board"><div class="step-board-title">⧉ 確定申告書へ転記する金額<span class="count">押すとコピー</span></div>' + boardFormHTML() + '</div>';
+    return '';
+  }
+
+  function renderGuide() {
+    var stepsBox = $('guideSteps');
+    if (!stepsBox) return;
+
+    var dl = deadlineOf(state.year);
+    var db = $('deadlineBox');
+    if (db) {
+      db.innerHTML = '<div class="deadline"><div class="dl-ico">🗓️</div><div class="dl-main">' +
+        '<div class="dl-title">' + yearLabel(state.year) + '分の申告期限</div>' +
+        '<div class="dl-sub">' + dl.start + ' 〜 ' + dl.end + '<br>還付申告なら' + (state.year + 1) + '年1月から提出できます。期限を過ぎると無申告加算税・延滞税の対象になります。</div>' +
+        '</div></div>';
     }
 
-    box.innerHTML = secHTML('青色申告決算書 1ページ目', sec1) + secHTML('確定申告書B 第一表', sec2) +
-      '<div class="rate-note">コピーされるのは数字だけです（例：41683）。金額欄にそのまま貼り付けられます。' +
-      (Object.keys(tot.byForm).some(function (k) { return ['雑費', '旅費交通費'].indexOf(k) >= 0; }) ? '会議費・新聞図書費・支払手数料は決算書では「雑費」に、車両費は「旅費交通費」にまとめて表示しています。' : '') +
-      '</div>';
+    var checks = checksOf();
+    var steps = pcSteps();
+    var doneCount = steps.filter(function (s) { return checks[s.id]; }).length;
+
+    var nav = steps.map(function (s) {
+      return '<button type="button" class="etax-nav-item' + (checks[s.id] ? ' done' : '') + '" data-goto="gstep-' + s.id + '">' +
+        '<span class="nn">' + (checks[s.id] ? '✓' : s.no) + '</span>' +
+        '<span class="nt">' + esc(s.title) + '<span class="ns">' + esc(s.sub) + '</span></span></button>';
+    }).join('') +
+      '<div class="bar" style="margin-top:8px;"><i style="width:' + Math.round(doneCount / steps.length * 100) + '%"></i></div>' +
+      '<div class="rate-note" style="margin-top:5px;">進捗 ' + doneCount + ' / ' + steps.length + 'ステップ</div>';
+    var navBox = $('guideNav');
+    if (navBox) navBox.innerHTML = nav;
+    var navCount = $('guideNavCount');
+    if (navCount) navCount.textContent = doneCount + '/' + steps.length;
+
+    var h = '';
+    steps.forEach(function (s) {
+      h += '<details class="step" id="gstep-' + s.id + '"' + (s.id === 'start' ? ' open' : '') + '>' +
+        '<summary>' +
+        '<span class="step-ico">' + s.ico + '</span>' +
+        '<span class="step-main"><span class="step-title">' + s.no + '. ' + esc(s.title) + '</span><span class="step-sub">' + esc(s.sub) + '</span></span>' +
+        '<button type="button" class="chk' + (checks[s.id] ? ' on' : '') + '" data-step="' + s.id + '" aria-label="完了にする">✓</button>' +
+        '</summary>' +
+        '<div class="step-body">' +
+        s.items.map(function (it, i) {
+          return '<div class="step-item"><span class="no">' + (i + 1) + '</span><span class="tx"><b>' + esc(it.t) + '</b>' +
+            (it.path ? '<span class="screen-path" style="display:inline-block;margin:3px 0;">PC画面：' + esc(it.path) + '</span>' : '') +
+            '<span>' + esc(it.d) + '</span></span></div>';
+        }).join('') +
+        guideLocalNotes(s.id) +
+        boardFor(s.board) +
+        '<div class="step-tip">💡 ' + esc(s.tip) + '</div>' +
+        '</div></details>';
+    });
+    stepsBox.innerHTML = h;
 
     var bc = $('boardCount');
-    if (bc) bc.textContent = (sec1.length + sec2.length) + '項目';
+    if (bc) {
+      var p1 = FORM_CATEGORIES.filter(function (c) { return (totalsForYear().byForm[c] || 0) > 0; }).length;
+      bc.textContent = (p1 + depSummary().count + 7) + '項目';
+    }
+  }
+
+  /* 旧名の互換（外部から呼ばれたとき用） */
+  function renderBoard() { renderGuide(); }
+
+  /* ============================================================
+     PC連携：JSON書き出し / 読み込み
+     ============================================================ */
+  function stripThumbs(list) {
+    return (Array.isArray(list) ? list : []).map(function (x) {
+      var c = Object.assign({}, x);
+      delete c.thumb;
+      return c;
+    });
+  }
+  function jsonPayload() {
+    var led = {};
+    Object.keys(state.ledgers || {}).forEach(function (k) { led[k] = stripThumbs(state.ledgers[k]); });
+    return {
+      app: 'receipt-excel',
+      schema: 4,
+      exportedAt: new Date().toISOString(),
+      year: state.year,
+      mode: state.mode,
+      rate: state.rate,
+      ledgers: led,
+      sales: state.sales,
+      blue: state.blue,
+      slips: state.slips,
+      ded: state.ded,
+      checks: state.checks,
+      assets: state.assets,
+      revs: state.revs,
+      trip: stripThumbs(state.trip),
+      sheet2026Applied: state.sheet2026Applied
+    };
+  }
+  function exportJSON() {
+    var payload = jsonPayload();
+    var name = '税金データ_' + state.year + '_' + stamp().replace(/[^0-9A-Za-z]/g, '') + '.json';
+    try {
+      var blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+      downloadBlob(blob, name);
+      toast('PC用データを書き出しました。パソコンで公開版を開いて「データ読み込み」で選んでください');
+    } catch (e) {
+      toast('書き出しに失敗しました', true);
+    }
+  }
+  function applyJSON(data, filename) {
+    if (!data || typeof data !== 'object') throw new Error('データの形式が違います');
+    if (!data.ledgers && !data.sales && !data.assets && !data.slips && !data.trip) throw new Error('このファイルには税金データが入っていません');
+    var counts = { led: 0, assets: 0 };
+    var led = data.ledgers && typeof data.ledgers === 'object' ? data.ledgers : {};
+    Object.keys(led).forEach(function (k) { if (Array.isArray(led[k])) counts.led += led[k].length; });
+    if (data.assets && typeof data.assets === 'object') {
+      Object.keys(data.assets).forEach(function (k) { if (Array.isArray(data.assets[k])) counts.assets += data.assets[k].length; });
+    }
+    var msg = '読み込むデータ：' + Object.keys(led).join('・') + '年分／経費 ' + counts.led + '件・減価償却 ' + counts.assets + '件\n' +
+      'この端末の同じ年度のデータは、読み込んだ内容で置きかわります。よろしいですか？';
+    if (!window.confirm(msg)) return;
+    if (data.ledgers) state.ledgers = data.ledgers;
+    if (data.sales) state.sales = data.sales;
+    if (data.blue) state.blue = data.blue;
+    if (data.slips) state.slips = data.slips;
+    if (data.ded) state.ded = data.ded;
+    if (data.checks) state.checks = data.checks;
+    if (data.assets) state.assets = data.assets;
+    if (data.revs) state.revs = data.revs;
+    if (Array.isArray(data.trip)) state.trip = data.trip;
+    if (typeof data.rate === 'number' && data.rate > 0) state.rate = data.rate;
+    if (typeof data.year === 'number' && data.year >= 2000 && data.year <= 2100) state.year = data.year;
+    if (typeof data.sheet2026Applied === 'boolean') state.sheet2026Applied = data.sheet2026Applied;
+    persist();
+    renderAll();
+    var yl = $('yearSelect'); if (yl) yl.value = String(state.year);
+    var ri = $('rateInput'); if (ri) ri.value = state.rate;
+    toast('読み込みました（経費 ' + counts.led + '件・減価償却 ' + counts.assets + '件）');
+  }
+  function importJSONFile(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var data = JSON.parse(String(reader.result || '{}'));
+        applyJSON(data, file.name);
+      } catch (e) {
+        toast('読み込めませんでした：' + (e && e.message ? e.message : 'JSONファイルではありません'), true);
+      }
+    };
+    reader.onerror = function () { toast('ファイルを読めませんでした', true); };
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  /* ============================================================
+     データを最新に一新（リセット＆再同期）
+     ============================================================ */
+  function resetAllData() {
+    var msg = 'この端末の登録データをすべて消して、最新の状態に作り直します。\n' +
+      '（領収書・源泉徴収票・所得控除・減価償却リスト・チェックの進捗が消えます。元に戻せません）\n\n' +
+      '必要なら先に「PC用データ書き出し（.json）」でバックアップしてください。続けますか？';
+    if (!window.confirm(msg)) return;
+    try { localStorage.removeItem(STORE_KEY); } catch (e) { /* noop */ }
+    state.trip = [];
+    state.ledgers = {};
+    state.sales = {};
+    state.blue = {};
+    state.slips = {};
+    state.ded = {};
+    state.checks = {};
+    state.assets = {};
+    state.revs = {};
+    state.sheet2026Applied = false;
+    state.presetApplied = false;
+    state.drafts = [];
+    state.mode = 'tax';
+    state.year = new Date().getFullYear();
+    applyPresets(false);
+    applyLocalPresets();
+    persist();
+    renderAll();
+    var ys = $('yearSelect'); if (ys) ys.value = String(state.year);
+    var ri = $('rateInput'); if (ri) ri.value = state.rate;
+    toast('データを最新の状態に一新しました');
+  }
+
+  /* ============================================================
+     各種届出・申請ナビ
+     ============================================================ */
+  function filingsLocalNote() {
+    return '';
+  }
+
+  function renderFilings() {
+    var box = $('filingsBody');
+    if (!box) return;
+    box.innerHTML =
+      '<details class="step" open><summary><span class="step-ico">🏠</span><span class="step-main"><span class="step-title">① 住所変更（納税地の異動）</span><span class="step-sub">届出書は原則不要。ただしe-Taxの利用者情報は自分で直す</span></span></summary>' +
+      '<div class="step-body">' +
+      '<div class="step-item"><span class="no">1</span><span class="tx"><b>令和5年1月1日以後は「納税地の異動届出書」の提出は不要</b><span>確定申告書に異動後の納税地（新住所）を書いて提出すれば、税務署はそこから把握します。転居した年の申告書で新住所を入れてください。</span></span></div>' +
+      '<div class="step-item"><span class="no">2</span><span class="tx"><b>e-Tax「利用者情報（基本情報）」の住所は自分で変更</b><span>e-Taxソフト（WEB版）にログイン →「利用者情報」→「基本情報」→ 住所・電話番号を訂正。管轄税務署（納税地）が変わる場合は「納税地」も新しい住所にします。ここを直さないと、還付通知・督促・証明書が旧住所に届きます。</span></span></div>' +
+      '<div class="step-item"><span class="no">3</span><span class="tx"><b>年の途中で送付先を変えたいとき</b><span>「所得税・消費税の納税地の異動又は変更に関する申出書」をe-Taxまたは書面で提出できます（任意）。</span></span></div>' +
+      '<div class="step-item"><span class="no">4</span><span class="tx"><b>振替納税・口座振替を使っている場合</b><span>金融機関に届け出た住所も変更が必要です。e-Taxソフト（WEB版）から「預貯金口座振替依頼書」を出し直すか、金融機関の窓口で住所変更をしてください。</span></span></div>' +
+      '<div class="pc-note">🔗 <a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/2091.htm" target="_blank" rel="noopener">国税庁 No.2091 個人事業者の納税地等に異動があった場合の届出関係</a>／<a href="https://www.e-tax.nta.go.jp/" target="_blank" rel="noopener">e-Taxソフト（WEB版）</a></div>' +
+      filingsLocalNote() +
+      '</div></details>' +
+
+      '<details class="step"><summary><span class="step-ico">🏪</span><span class="step-main"><span class="step-title">② 個人事業の開業・廃業等届出書（開業届）</span><span class="step-sub">e-Taxソフト（WEB版）からオンライン提出</span></span></summary>' +
+      '<div class="step-body">' +
+      '<div class="step-item"><span class="no">1</span><span class="tx"><b>提出期限</b><span>開業した日の属する年分の確定申告期限まで。ただし青色申告の承認申請は「開業から2ヶ月以内」と別に期限があるので先に出します。</span></span></div>' +
+      '<div class="step-item"><span class="no">2</span><span class="tx"><b>e-Taxソフト（WEB版）を開く</b><span><span class="screen-path">申告・申請・納税</span> → <span class="screen-path">新規作成</span> → <span class="screen-path">申請・届出等</span> → <span class="screen-path">個人事業の開業・廃業等届出書</span> の順に選びます。</span></span></div>' +
+      '<div class="step-item"><span class="no">3</span><span class="tx"><b>入力する項目</b><span>納税地（住所）／氏名・マイナンバー／職業（例：飲食店の運営、撮影・映像制作、Web制作など）／屋号（任意・銀行口座名になります）／開業日／事業所の所在地と電話番号／給与支払事務所の有無／源泉徴収の有無／青色申告承認申請の有無。</span></span></div>' +
+      '<div class="step-item"><span class="no">4</span><span class="tx"><b>提出したら控えを保存</b><span>送信結果の画面と「受付番号」をPDFで保存。e-Taxのメッセージボックスにも届きます。</span></span></div>' +
+      '<div class="pc-note">🔗 <a href="https://www.nta.go.jp/taxes/tetsuzuki/shinsei/annai/shinkoku/annai/04.htm" target="_blank" rel="noopener">国税庁 A1-5 個人事業の開業届出・廃業届出等手続</a>／<a href="https://www.nta.go.jp/taxes/tetsuzuki/shinsei/annai/shinkoku/annai/42.htm" target="_blank" rel="noopener">開業する場合（提出書類一覧）</a></div>' +
+      '</div></details>' +
+
+      '<details class="step"><summary><span class="step-ico">🟦</span><span class="step-main"><span class="step-title">③ 所得税の青色申告承認申請書</span><span class="step-sub">開業から2ヶ月以内／その年3月15日まで</span></span></summary>' +
+      '<div class="step-body">' +
+      '<div class="step-item"><span class="no">1</span><span class="tx"><b>期限</b><span>その年分から青色にしたいなら3月15日まで。年の中途（1月16日以後）に開業した場合は、開業日から2ヶ月以内です。</span></span></div>' +
+      '<div class="step-item"><span class="no">2</span><span class="tx"><b>e-Taxソフト（WEB版）から提出</b><span>ログイン → <span class="screen-path">マイページ</span> → <span class="screen-path">申請・届出等</span> → <span class="screen-path">所得税の青色申告承認申請書</span>。税目は「所得税」、提出年分を選びます。</span></span></div>' +
+      '<div class="step-item"><span class="no">3</span><span class="tx"><b>入力する項目</b><span>提出年分／納税地／氏名・マイナンバー／職業・事業内容／開業日／簿記方式（複式簿記）／備忘価額（1円）／前年分の承認の有無／事業専従者の有無。</span></span></div>' +
+      '<div class="step-item"><span class="no">4</span><span class="tx"><b>控除額の違い</b><span>65万円＝e-Tax送信＋電子帳簿保存（優良な電子帳簿）／55万円＝e-Tax送信のみ／10万円＝紙提出。65万円を狙うなら、帳簿はこのアプリのExcelと領収書PDFを7年間保存してください。</span></span></div>' +
+      '<div class="pc-note">🔗 <a href="https://www.nta.go.jp/taxes/tetsuzuki/shinsei/annai/shinkoku/annai/09.htm" target="_blank" rel="noopener">国税庁 A1-8 所得税の青色申告承認申請手続</a>／<a href="https://www.nta.go.jp/taxes/shiraberu/taxanswer/shotoku/2070.htm" target="_blank" rel="noopener">No.2070 青色申告制度</a></div>' +
+      '</div></details>' +
+
+      '<details class="step"><summary><span class="step-ico">🧰</span><span class="step-main"><span class="step-title">④ その他よく使う申請・確認</span><span class="step-sub">振替納税・納税証明書・更正の請求の結果</span></span></summary>' +
+      '<div class="step-body">' +
+      '<div class="step-item"><span class="no">1</span><span class="tx"><b>振替納税（口座振替）</b><span>e-Taxソフト（WEB版）→「申請・届出等」→「所得税」→「振替納税に関する依頼書」。または金融機関に「預貯金口座振替依頼書」を出す。登録は3月中旬までに済ませると、その年の納付から口座振替になります。</span></span></div>' +
+      '<div class="step-item"><span class="no">2</span><span class="tx"><b>納税証明書</b><span>e-Taxソフト（WEB版）からオンラインで交付請求できます（税目・年度・用途を選ぶ）。コンビニ交付や税務署窓口でも取得できます。</span></span></div>' +
+      '<div class="step-item"><span class="no">3</span><span class="tx"><b>更正の請求の結果</b><span>e-Taxのメッセージボックスに「更正通知書」が届きます。還付は指定口座へ振込まれます（処理状況は「還付金の処理状況」で確認）。</span></span></div>' +
+      '<div class="step-item"><span class="no">4</span><span class="tx"><b>消費税</b><span>開業した年と翌年は原則免税事業者です。インボイス発行事業者の登録をした場合だけ消費税の申告が必要になります。</span></span></div>' +
+      '<div class="pc-note">🔗 <a href="https://www.e-tax.nta.go.jp/" target="_blank" rel="noopener">e-Taxソフト（WEB版）</a>／<a href="https://www.nta.go.jp/taxes/tetsuzuki/" target="_blank" rel="noopener">国税庁 申告・申請・納税</a></div>' +
+      '</div></details>';
+  }
+
+  /* ============================================================
+     マイナポータル連携ナビ＋控除証明書XMLの簡易読み取り
+     ============================================================ */
+  var mynaXmlValues = [];
+  function mynaXmlGuess(tag) {
+    var t = String(tag).toLowerCase();
+    if (/(number|code|id$|^no$|year|date)/.test(t)) return null;
+    if (/earthquake|quake|jishin|地震/.test(t)) return { field: 'quake', label: '地震保険料' };
+    if (/care|kaigo|介護/.test(t)) return { field: 'lifeCare', label: '介護医療保険料' };
+    if (/pension|nenkin|年金/.test(t)) return { field: 'lifePenNew', label: '個人年金保険料' };
+    if (/ideco|kigyo|小規模企業共済/.test(t)) return { field: 'ideco', label: '小規模企業共済等掛金' };
+    if (/social|kokuho|nenkin|社会保険|国民年金|国民健康保険/.test(t)) return { field: 'socialExtra', label: '社会保険料' };
+    if (/life|seimei|生命|insurance|premium|hoken|保険/.test(t)) return { field: 'lifeGenNew', label: '生命保険料（一般）' };
+    if (/donation|furusato|kifu|寄附/.test(t)) return { field: 'donPaid', label: '寄附金' };
+    if (/medical|iryo|医療/.test(t)) return { field: 'medPaid', label: '医療費' };
+    return null;
+  }
+  function renderMynaXml() {
+    var box = $('mynaXmlResult');
+    if (!box) return;
+    if (!mynaXmlValues.length) {
+      box.innerHTML = '';
+      return;
+    }
+    var rows = mynaXmlValues.map(function (r, i) {
+      return '<div class="board-row">' +
+        '<div class="bl"><b>' + esc(r.label || r.tag) + '</b><span>' + esc(r.tag) + ' ＝ ' + esc(r.value) + '</span></div>' +
+        '<div class="bv">' + Number(r.amount).toLocaleString('ja-JP') + '</div>' +
+        '<button class="copy-btn" data-xmlcopy="' + i + '" aria-label="コピー">⧉</button>' +
+        (r.field ? '<button class="mini-btn" data-xmlapply="' + i + '">控除へ反映</button>' : '') +
+        '</div>';
+    }).join('');
+    box.innerHTML = '<div class="board-sec"><h4>読み取った控除証明書の内容（参考）</h4>' + rows +
+      '<div class="rate-note">金額が「支払額」か「控除額」かは証明書の表示で確認してください。「控除へ反映」は所得控除の詳細の該当欄に入れます（上書きされます）。</div></div>';
+  }
+  function readMynaXml(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var txt = String(reader.result || '');
+        if (!txt.trim()) throw new Error('ファイルが空です');
+        var doc = new DOMParser().parseFromString(txt, 'application/xml');
+        if (doc.getElementsByTagName('parsererror').length) throw new Error('XMLとして読めませんでした（拡張子と中身を確認してください）');
+        var leaves = [];
+        (function walk(node) {
+          for (var i = 0; i < node.childNodes.length; i += 1) {
+            var ch = node.childNodes[i];
+            if (ch.nodeType !== 1) continue;
+            var kids = ch.childNodes, textOnly = true;
+            for (var j = 0; j < kids.length; j += 1) { if (kids[j].nodeType === 1) { textOnly = false; break; } }
+            var v = String(ch.textContent || '').trim();
+            if (textOnly) { if (v) leaves.push({ tag: ch.nodeName, value: v }); }
+            else walk(ch);
+          }
+        })(doc.documentElement);
+        var rows = [];
+        leaves.forEach(function (l) {
+          var digits = l.value.replace(/[^0-9]/g, '');
+          if (!digits || digits.length < 3) return;
+          if (/^[0-9,，.]+$/.test(l.value) && !/(number|code|id$|^no$)/i.test(l.tag)) {
+            var g = mynaXmlGuess(l.tag);
+            rows.push({ tag: l.tag, value: l.value, amount: Number(digits), label: g ? g.label : '', field: g ? g.field : '' });
+          }
+        });
+        if (!rows.length) throw new Error('金額らしい項目が見つかりませんでした');
+        mynaXmlValues = rows.slice(0, 40);
+        renderMynaXml();
+        toast('控除証明書を読み取りました（' + mynaXmlValues.length + '項目）');
+      } catch (e) {
+        toast('読み取れませんでした：' + (e && e.message ? e.message : 'XMLではありません'), true);
+      }
+    };
+    reader.onerror = function () { toast('ファイルを読めませんでした', true); };
+    reader.readAsText(file, 'UTF-8');
+  }
+  function applyXmlDed(i) {
+    var r = mynaXmlValues[i];
+    if (!r || !r.field) return;
+    var d = dedOf();
+    d[r.field] = r.amount;
+    persist();
+    renderDeductions();
+    renderRiskResults();
+    toast(r.label + ' ' + yen(r.amount) + ' を控除の詳細に入れました');
+  }
+  function renderMyna() {
+    /* カードの中身は index.html に静的においてある。ここではXML結果の初期化だけ。 */
+    renderMynaXml();
   }
 
   /* ============================================================
@@ -2771,17 +3531,50 @@
       }
     }
 
+    /* 減価償却資産台帳（e-Taxの3ページ目と同じ並び＋参考列） */
+    var dep = depSummary();
+    var rows6 = [['資産の名称等', '取得年月日', '取得価額', '償却方法', '耐用年数', '償却率', '本年中の償却期間', '本年分の普通償却費', '事業専用割合(%)', '本年分の必要経費算入額', '期末未償却残高', '前年末未償却残高', '摘要・メモ', '経費帳計上額', '差額']];
+    dep.rows.forEach(function (r) {
+      var a = r.a, c = r.c;
+      var ts = r.taxsnap ? r.taxsnap.amount : null;
+      rows6.push([
+        a.name || '', a.acquired || '', c.cost || 0, c.method, Number(a.life) || 0, c.rate, c.months,
+        c.ordinary, c.pct, c.expense, c.bookEnd === '' ? '' : c.bookEnd,
+        a.opening === '' || a.opening === undefined ? '' : a.opening,
+        (a.memo || '') + (c.notes.length ? (a.memo ? '／' : '') + c.notes.join('／') : ''),
+        ts === null ? '' : ts, ts === null ? '' : c.expense - ts
+      ]);
+    });
+    if (!dep.rows.length) rows6.push(['（登録なし）', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    rows6.push([]);
+    rows6.push(['資産数', dep.count, '取得価額合計', dep.cost, '', '', '', '普通償却費合計', dep.ordinary, '算入額合計', dep.expense, '', '', '', '']);
+    rows6.push(['経費帳の減価償却費', dep.taxsnap, '差額', dep.diff, '', '', '', '※金額は円未満切り捨ての概算。申告前に取得価額と事業割合を書類で確認してください。', '', '', '', '', '', '', '']);
+    ['この台帳は e-Tax 青色申告決算書3ページ目「減価償却費の計算」と同じ並びです。',
+     '定額法：本年分の普通償却費＝取得価額×償却率×本年中の償却期間÷12（償却可能限度額は備忘価額1円）。',
+     '一括償却3年：取得価額÷36×本年中の償却期間。少額特例：30万円未満を取得年に全額（年間合計300万円まで）。',
+     '事業専用割合は家事按分後の％です。必要経費算入額＝普通償却費×事業専用割合。'
+    ].forEach(function (n) { rows6.push([n]); });
+    var ws6 = XLSX.utils.aoa_to_sheet(rows6);
+    styleWidths(ws6, [30, 13, 12, 12, 9, 8, 10, 13, 10, 14, 13, 13, 46, 12, 10]);
+    for (var r6 = 2; r6 <= dep.rows.length + 1; r6 += 1) {
+      [3, 8, 10, 11, 12, 14, 15].forEach(function (c) {
+        var cell = ws6[XLSX.utils.encode_cell({ r: r6 - 1, c: c - 1 })];
+        if (cell && typeof cell.v === 'number') cell.z = '#,##0';
+      });
+    }
+
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, maskSheetName('領収書明細'));
     XLSX.utils.book_append_sheet(wb, ws2, maskSheetName('科目別集計'));
     XLSX.utils.book_append_sheet(wb, ws3, maskSheetName('税務チェック'));
     XLSX.utils.book_append_sheet(wb, ws5, maskSheetName('税務診断・源泉'));
     XLSX.utils.book_append_sheet(wb, ws4, maskSheetName('確定申告サマリー'));
+    XLSX.utils.book_append_sheet(wb, ws6, maskSheetName('減価償却資産台帳'));
     return {
       wb: wb,
       filename: '領収書一覧_' + state.year + '_' + stamp() + '.xlsx',
       total: total, count: list.length,
-      hasTaxData: activeSlips(slipsOf()).length > 0 || salesOf() > 0
+      hasTaxData: activeSlips(slipsOf()).length > 0 || salesOf() > 0 || dep.count > 0
     };
   }
 
@@ -2937,6 +3730,14 @@
     if (sim.dokujuu) lines.push('専従者給与\t' + sim.dokujuu);
     lines.push('青色申告特別控除額\t' + sim.blueApplied);
     lines.push('所得金額（事業所得）\t' + sim.biz);
+    var dep = depSummary();
+    if (dep.count) {
+      lines.push('【減価償却費の計算（3ページ目）】\t資産名\t取得年月\t取得価額\t償却方法\t耐用年数\t償却率\t償却期間\t普通償却費\t事業割合\t算入額\t未償却残高');
+      dep.rows.forEach(function (r) {
+        var a = r.a, c = r.c;
+        lines.push(['', a.name || '', a.acquired || '', c.cost || '', c.method, a.life || '', c.rate ? c.rate.toFixed(3) : '', c.months, c.ordinary, c.pct, c.expense, c.bookEnd === '' ? '' : c.bookEnd].join('\t'));
+      });
+    }
     lines.push('給与収入\t' + sim.pay);
     lines.push('給与所得\t' + sim.salary);
     lines.push('合計所得金額\t' + sim.totalIncome);
@@ -2987,6 +3788,35 @@
     persist();
   }
 
+  function applySlipPresets2025() {
+  }
+
+  var SHEET_PRESET_2026 = null;
+
+  function applySheetPresets2026() {
+    if (!SHEET_PRESET_2026) return;
+    if (state.sheet2026Applied) return;
+    var key = String(SHEET_PRESET_2026.year);
+    var existing = state.ledgers[key];
+    if (Array.isArray(existing) && existing.length) { state.sheet2026Applied = true; persist(); return; }
+    var now = new Date().toISOString();
+    state.ledgers[key] = SHEET_PRESET_2026.entries.map(function (e, i) {
+      return Object.assign({}, e, { id: e.id || ('sheet-' + i), createdAt: now });
+    });
+    state.sales[key] = SHEET_PRESET_2026.sales;
+    state.blue[key] = SHEET_PRESET_2026.blue;
+    state.revs[key] = (SHEET_PRESET_2026.revs || []).map(function (r) { return Object.assign({}, r); });
+    if (!Array.isArray(state.assets[key]) || !state.assets[key].length) {
+      state.assets[key] = SHEET_PRESET_2026.assets.map(function (a) { return Object.assign({}, a); });
+    }
+    state.sheet2026Applied = true;
+    persist();
+  }
+
+  /* 個人向けの初期データ（公開版ビルドでは中身が空になる） */
+  function applyLocalPresets() {
+  }
+
   function switchMode(m) {
     if (m === state.mode) return;
     state.mode = m;
@@ -2998,6 +3828,7 @@
   function init() {
     load();
     applyPresets(false);
+    applyLocalPresets();
 
     $('rateInput').value = state.rate;
 
@@ -3081,7 +3912,10 @@
       if (!list.length) return;
       if (!window.confirm(list.length + '件をすべて削除します。よろしいですか？（元に戻せません）')) return;
       if (state.mode === 'trip') { state.trip = []; state.presetApplied = true; }
-      else { state.ledgers[ykey()] = []; }
+      else {
+        state.ledgers[ykey()] = [];
+        if (String(state.year) === '2026') state.sheet2026Applied = true;
+      }
       persist();
       renderAll();
       toast('すべて削除しました');
@@ -3247,16 +4081,32 @@
       if (c[id]) delete c[id]; else c[id] = true;
       btn.classList.toggle('on', !!c[id]);
       persist();
-      // 進捗バーだけ更新
-      var steps = guideSteps();
+      // 進捗と左のナビだけ更新
+      var steps = pcSteps();
       var done = steps.filter(function (s) { return c[s.id]; }).length;
-      var cnt = document.querySelector('#guideSteps .card .count');
-      var bar = document.querySelector('#guideSteps .bar > i');
-      if (cnt) cnt.textContent = done + ' / ' + steps.length + 'ステップ';
-      if (bar) bar.style.width = Math.round(done / steps.length * 100) + '%';
+      var navCount = $('guideNavCount');
+      if (navCount) navCount.textContent = done + '/' + steps.length;
+      var navBox = $('guideNav');
+      if (navBox) {
+        Array.prototype.forEach.call(navBox.querySelectorAll('.etax-nav-item'), function (b, i) {
+          var on = !!c[steps[i] && steps[i].id];
+          b.classList.toggle('done', on);
+          var nn = b.querySelector('.nn');
+          if (nn) nn.textContent = on ? '✓' : String(steps[i] ? steps[i].no : i + 1);
+        });
+        var bar = navBox.querySelector('.bar > i');
+        if (bar) bar.style.width = Math.round(done / steps.length * 100) + '%';
+      }
     });
 
-    $('board').addEventListener('click', function (ev) {
+    /* 転記ボードのコピー（ステップの中に埋め込まれている） */
+    $('guideSteps').addEventListener('click', function (ev) {
+      var rowBtn = ev.target.closest('[data-copyrow]');
+      if (rowBtn) {
+        var a = depFind(rowBtn.getAttribute('data-copyrow'));
+        if (a) depCopyRow(a);
+        return;
+      }
       var btn = ev.target.closest('[data-copy]');
       if (!btn) return;
       var v = btn.getAttribute('data-copy');
@@ -3265,6 +4115,93 @@
       btn.textContent = '✓';
       setTimeout(function () { btn.classList.remove('done'); btn.textContent = '⧉'; }, 1200);
     });
+
+    /* 左ナビ：押したステップを開いて移動 */
+    var navBox = $('guideNav');
+    if (navBox) {
+      navBox.addEventListener('click', function (ev) {
+        var b = ev.target.closest('[data-goto]');
+        if (!b) return;
+        var el = document.getElementById(b.getAttribute('data-goto'));
+        if (!el) return;
+        el.open = true;
+        try { el.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { el.scrollIntoView(); }
+        Array.prototype.forEach.call(navBox.querySelectorAll('.etax-nav-item'), function (x) { x.classList.remove('on'); });
+        b.classList.add('on');
+      });
+    }
+
+    /* ---------- 減価償却リスト ---------- */
+    var depBody = $('depBody');
+    if (depBody) {
+      depBody.addEventListener('input', depInputHandler);
+      depBody.addEventListener('change', function (ev) {
+        var el = ev.target.closest('[data-dep]');
+        if (!el) return;
+        if (el.tagName === 'SELECT') { renderDep(); renderBoard(); }
+      });
+      depBody.addEventListener('click', function (ev) {
+        var b = ev.target.closest('[data-depact]');
+        if (!b) return;
+        var act = b.getAttribute('data-depact');
+        if (act === 'add') { depNewAsset(); return; }
+        if (act === 'copyall') { depCopyAll(); return; }
+        if (act === 'restore') { depRestore(); return; }
+        if (act === 'toexpense') { saveWorkbook(false); return; }
+        var id = b.getAttribute('data-id');
+        if (act === 'copy' && id) { var a = depFind(id); if (a) depCopyRow(a); return; }
+        if (act === 'del' && id) {
+          var t = depFind(id);
+          if (!t) return;
+          if (!window.confirm('「' + (t.name || 'この資産') + '」を台帳から削除しますか？')) return;
+          var arr = assetsOf();
+          var idx = arr.findIndex(function (x) { return x.id === id; });
+          if (idx >= 0) arr.splice(idx, 1);
+          persist();
+          renderDep();
+          renderBoard();
+          toast('削除しました');
+        }
+      });
+    }
+
+    /* ---------- PC連携・マイナポータル・リセット ---------- */
+    document.addEventListener('click', function (ev) {
+      var j = ev.target.closest('[data-json]');
+      if (!j) return;
+      if (j.getAttribute('data-json') === 'export') exportJSON();
+      else { var fi = $('fileJsonImport'); if (fi) fi.click(); }
+    });
+    var fji = $('fileJsonImport');
+    if (fji) fji.addEventListener('change', function (ev) {
+      if (ev.target.files && ev.target.files[0]) importJSONFile(ev.target.files[0]);
+      ev.target.value = '';
+    });
+    var btnXml = $('btnXml');
+    if (btnXml) {
+      btnXml.addEventListener('click', function () { var f = $('fileXml'); if (f) f.click(); });
+      var fx = $('fileXml');
+      if (fx) fx.addEventListener('change', function (ev) {
+        if (ev.target.files && ev.target.files[0]) readMynaXml(ev.target.files[0]);
+        ev.target.value = '';
+      });
+    }
+    var xmlRes = $('mynaXmlResult');
+    if (xmlRes) {
+      xmlRes.addEventListener('click', function (ev) {
+        var c = ev.target.closest('[data-xmlcopy]');
+        if (c) {
+          var r = mynaXmlValues[Number(c.getAttribute('data-xmlcopy'))];
+          if (r) copyText(String(r.amount), r.amount.toLocaleString('ja-JP') + ' をコピーしました');
+          return;
+        }
+        var a = ev.target.closest('[data-xmlapply]');
+        if (a) applyXmlDed(Number(a.getAttribute('data-xmlapply')));
+      });
+    }
+    var btnReset = $('btnResetAll');
+    if (btnReset) btnReset.addEventListener('click', resetAllData);
+
     $('btnBoardTsv').addEventListener('click', copyBoardTSV);
     $('btnBoardPrint').addEventListener('click', function () { window.print(); });
 
@@ -3314,6 +4251,17 @@
       return x;
     },
     sim: function () { return computeSim(); },
+    dep: function () { return depSummary(); },
+    assets: function () { return assetsOf(); },
+    addAsset: function (a) {
+      var x = Object.assign({ id: 'dep-' + uid(), name: '', acquired: '', cost: '', method: '定額法', life: 5, rate: 0.2, months: 12, bizPct: 100, memo: '', opening: '', override: '', source: 'manual' }, a || {});
+      assetsOf().push(x);
+      persist(); renderAll();
+      return x;
+    },
+    json: function () { return jsonPayload(); },
+    importJSON: function (data) { applyJSON(data, ''); },
+    renderDep: renderDep,
     addEntry: function (e) {
       var x = Object.assign({ id: uid(), date: todayStr(), vendor: '', category: '雑費', currency: 'JPY', amount: 0, taxType: '', invoiceNo: '', memo: '', source: 'manual', createdAt: new Date().toISOString() }, e);
       taxList().push(x);
@@ -3323,7 +4271,8 @@
     snapshot: function () {
       return {
         mode: state.mode, year: state.year, rate: state.rate,
-        tax: taxList(), trip: state.trip,
+        tax: taxList(), trip: state.trip, assets: assetsOf(), revs: revsOf(),
+        dep: (function () { var d = depSummary(); return { count: d.count, cost: d.cost, ordinary: d.ordinary, expense: d.expense, taxsnap: d.taxsnap, diff: d.diff, missing: d.missing }; })(),
         sales: salesOf(), blue: blueOf(), slips: slipsOf(), ded: dedOf(),
         sim: (function () { var x = computeSim(); return { salary: x.salary, totalIncome: x.totalIncome, ded: x.ded, taxable: x.taxable, totalTax: x.totalTax, diff: x.diff, residentTax: x.residentTax, warnings: x.warnings }; })(),
         drafts: state.drafts.map(function (d) {

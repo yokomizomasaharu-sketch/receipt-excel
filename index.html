@@ -3,9 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>領収書スキャン → Excel ／ 青色申告・税務チェック</title>
 <meta name="theme-color" content="#ffffff">
-<meta name="description" content="領収書を撮影するだけで、端末内OCRで日付・店名・金額・勘定科目を読み取り、Excel（.xlsx）に出力するアプリ。税務リスク診断・源泉徴収票との損益通算・e-Taxへの転記ボード付き。">
+<meta name="description" content="領収書を撮影するだけで、端末内OCRで日付・店名・金額・勘定科目を読み取り、Excel（.xlsx）に出力するアプリ。減価償却リスト（固定資産台帳）・税務リスク診断・源泉徴収票との損益通算・PC版e-Taxの画面どおり入力ナビ・JSON書き出し/読み込み付き。">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -17,6 +16,7 @@
   /* Pickleアプリ内（iframe）以外＝Web単体・ホーム画面アプリでは「閉じる」を出さない */
   try { if (window.parent === window) document.documentElement.classList.add('standalone'); } catch (e) {}
 </script>
+<title>領収書スキャン → Excel ／ 青色申告・税務チェック</title>
 <style>
   :root {
     box-sizing: border-box;
@@ -59,7 +59,6 @@
     padding: 8px 14px; border-radius: 999px; font-size: 12px; font-weight: 600;
     min-height: 36px; cursor: pointer;
   }
-  .standalone .close-btn { display: none !important; }
 
   /* ---------- Mode tabs ---------- */
   .mode-tabs {
@@ -451,6 +450,125 @@
   .copy-btn.done { color: #fff; background: var(--ok); border-color: var(--ok); }
   .board-total { border-top: 2px solid var(--line) !important; padding-top: 10px !important; }
   .board-total .bl b { font-size: 12.5px; }
+
+  /* ============================================================
+     減価償却リスト（固定資産台帳）
+     ============================================================ */
+  .dep-sum { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .dep-kpi { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #fcfdff; min-width: 0; }
+  .dep-kpi .l { font-size: 10px; color: var(--ink-2); line-height: 1.35; }
+  .dep-kpi .v { font-size: 15px; font-weight: 700; margin-top: 1px; font-variant-numeric: tabular-nums; }
+  .dep-kpi .n { font-size: 10px; color: var(--ink-3); line-height: 1.4; margin-top: 2px; }
+  .dep-kpi.full { grid-column: 1 / -1; }
+  .dep-kpi.amber { background: #fffcf3; border-color: #f2e6c9; }
+  .dep-kpi.amber .v { color: #b45309; }
+  .dep-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: 11px; }
+  table.dep { border-collapse: collapse; width: 100%; min-width: 1120px; font-size: 11px; }
+  table.dep th { background: #f8fafc; color: var(--ink-2); font-weight: 700; font-size: 9.5px; padding: 7px 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; line-height: 1.25; }
+  table.dep td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.dep tr:last-child td { border-bottom: none; }
+  table.dep .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .dep-in { width: 100%; min-width: 60px; border: 1px solid var(--line); border-radius: 6px; padding: 5px; font-size: 12px; background: #fff; color: var(--ink); }
+  .dep-in.name { min-width: 200px; }
+  .dep-in.memo { min-width: 170px; }
+  .dep-in.money { min-width: 80px; text-align: right; }
+  .dep-calc { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .dep-calc.diff { color: #b45309; }
+  .dep-note-row td { background: #fcfdff; font-size: 10.5px; color: var(--ink-2); line-height: 1.55; padding-top: 4px; padding-bottom: 8px; }
+  .dep-note-row .dep-note-in { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 5px; }
+  .dep-note-row .dep-note-in .dep-ov { width: 110px; }
+  .dep-note-row .mini-btn { min-height: 28px; padding: 3px 8px; font-size: 10.5px; }
+  .dep-badge { display: inline-block; font-size: 9.5px; font-weight: 700; border-radius: 999px; padding: 1px 7px; margin-right: 4px; }
+  .dep-badge.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+  .dep-badge.warn { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+  .dep-badge.info { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+  .dep-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+  .dep-actions .btn-ghost { flex: 1; min-width: 150px; }
+  .scroll-hint { font-size: 10px; color: var(--ink-3); margin-top: 5px; }
+
+  /* ---------- PC版e-Tax ナビ ---------- */
+  .etax-nav-item { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left; border: 1px solid transparent; background: #fff; border-radius: 9px; padding: 8px 9px; cursor: pointer; margin-bottom: 4px; min-height: 44px; }
+  .etax-nav-item:hover { background: var(--fill); }
+  .etax-nav-item.on { background: var(--accent-soft); border-color: #bae6fd; }
+  .etax-nav-item .nn { flex: none; width: 20px; height: 20px; border-radius: 6px; background: #e2e8f0; color: var(--ink-2); font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+  .etax-nav-item.on .nn { background: var(--accent); color: #fff; }
+  .etax-nav-item.done .nn { background: var(--ok); color: #fff; }
+  .etax-nav-item .nt { flex: 1; min-width: 0; font-size: 11px; font-weight: 700; line-height: 1.35; }
+  .etax-nav-item .ns { display: block; font-size: 9.5px; color: var(--ink-3); font-weight: 500; margin-top: 1px; }
+  .screen-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 5px; padding: 1px 5px; color: #334155; word-break: break-all; }
+  .step-board { margin-top: 10px; }
+  .step-board-title { font-size: 11px; font-weight: 700; color: var(--accent); margin: 12px 0 6px; display: flex; align-items: center; gap: 6px; }
+  .step-board-title .count { font-weight: 500; color: var(--ink-3); margin-left: auto; font-size: 10px; }
+  .pc-note { font-size: 10.5px; line-height: 1.55; color: var(--ink-2); background: #f8fafc; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; margin-top: 8px; }
+  .pc-note b { color: var(--ink); }
+  .pc-tag { display: inline-block; font-size: 9.5px; font-weight: 700; padding: 1px 6px; border-radius: 5px; background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe; margin-right: 4px; }
+  .rent-guide { border: 1px solid var(--line); border-radius: 10px; background: #fcfdff; padding: 9px 10px; margin-bottom: 8px; }
+  .rent-guide .rg-head { font-size: 11.5px; font-weight: 700; }
+  .rent-guide .rg-sub { font-size: 10px; color: var(--ink-3); margin-top: 2px; }
+  .month-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
+  .month-cell { border: 1px solid var(--line); border-radius: 8px; padding: 5px 4px; text-align: center; background: #fff; }
+  .month-cell .m { font-size: 9.5px; color: var(--ink-2); }
+  .month-cell .a { font-size: 10.5px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 1px; }
+  .month-cell.zero .a { color: var(--ink-3); font-weight: 500; }
+  .copy-row-btn { white-space: nowrap; }
+  .json-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .json-row .btn-ghost { min-height: 46px; font-size: 12px; }
+  .link-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 10px; }
+  a.btn-ghost { display: flex; align-items: center; justify-content: center; text-align: center; text-decoration: none; padding: 8px 10px; }
+  .json-note { font-size: 10.5px; color: var(--ink-3); line-height: 1.55; margin-top: 8px; }
+  .json-note b { color: var(--accent); }
+
+  /* ---------- PC（横並び）レイアウト ---------- */
+  @media (min-width: 900px) {
+    body { max-width: 1280px; margin: 0 auto; padding: 20px 28px 40px; }
+    .kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .kpi.wide { grid-column: span 2; }
+    .kpi.wide .kpi-value { font-size: 24px; }
+    .mode-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .mode-tab { font-size: 13px; flex-direction: row; gap: 7px; min-height: 44px; }
+    .mode-tab .tab-ico { font-size: 16px; }
+    #viewRisk.desk-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 14px; align-items: start; }
+    #viewRisk.desk-grid > .card { margin-bottom: 14px; }
+    #viewRisk.desk-grid > .card.span2 { grid-column: 1 / -1; }
+    .dep-sum { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .dep-sum .dep-kpi.full { grid-column: 1 / -1; }
+    .etax-wrap { display: grid; grid-template-columns: 268px minmax(0, 1fr); gap: 18px; align-items: start; }
+    .etax-nav { position: sticky; top: 14px; }
+    .guide-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+    .board-sec { margin-bottom: 0; }
+    .step > summary { padding: 14px 15px; }
+    .step-title { font-size: 14.5px; }
+    .step-item { font-size: 12.5px; }
+    .sticky-bar { left: auto; right: 24px; bottom: 20px; max-width: 430px; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 24px rgba(15,23,42,.14); }
+  }
+  @media (min-width: 1180px) {
+    .month-grid { grid-template-columns: repeat(12, 1fr); }
+  }
+
+  /* ---------- スマホ：台帳をカード表示 ---------- */
+  @media (max-width: 820px) {
+    .dep-wrap { overflow: visible; border: none; }
+    table.dep { min-width: 0; }
+    table.dep, table.dep tbody, table.dep tr, table.dep td { display: block; width: 100%; }
+    table.dep thead { display: none; }
+    table.dep tr.dep-row { border: 1px solid var(--line); border-radius: 11px; background: #fcfdff; margin-bottom: 8px; padding: 5px 9px; }
+    table.dep tr.dep-row td { border-bottom: 1px dashed var(--line); padding: 5px 0; display: flex; gap: 8px; align-items: center; }
+    table.dep tr.dep-row td:last-child { border-bottom: none; }
+    table.dep tr.dep-row td::before { content: attr(data-label); flex: none; width: 112px; font-size: 10px; color: var(--ink-2); font-weight: 600; line-height: 1.3; }
+    table.dep tr.dep-row td.calc { justify-content: space-between; }
+    table.dep tr.dep-row td.calc::before { width: 112px; }
+    table.dep tr.dep-note-row { display: block; margin: -10px 0 10px; border: 1px solid var(--line); border-top: none; border-radius: 0 0 11px 11px; background: #fcfdff; padding: 0 9px; }
+    table.dep tr.dep-note-row td { display: block; }
+    .month-grid { grid-template-columns: repeat(4, 1fr); }
+    .json-row { grid-template-columns: 1fr; }
+  }
+
+  @media print {
+    body { padding: 0; max-width: none; }
+    .sticky-bar, .mode-tabs, #btnBoardPrint, .json-row, .close-btn, .dep-actions, .copy-btn { display: none !important; }
+    .card, .step { break-inside: avoid; }
+  }
+  .standalone .close-btn { display: none !important; }
 </style>
 </head>
 <body>
@@ -553,6 +671,10 @@
       <button class="btn-ghost" id="btnDownload">💾 端末にダウンロード</button>
       <button class="btn-ghost" id="btnTsv">📋 コピー（TSV）</button>
     </div>
+    <div class="export-row" style="margin-top:8px;">
+      <button class="btn-ghost" data-json="export">🖥️ PC用データ書き出し（.json）</button>
+      <button class="btn-ghost" data-json="import">📂 データ読み込み（.json）</button>
+    </div>
     <div class="export-note" id="exportNote">
       シート「領収書明細」＋「科目別集計」＋「税務チェック」＋「税務診断・源泉」＋「確定申告サマリー」。源泉徴収票の内訳・所得控除の内訳・還付試算もすべて入ります。金額はSUM数式入りで、そのまま計算・並べ替えできます。
     </div>
@@ -563,7 +685,7 @@
 <!-- ============================================================
      タブ3：税務リスク診断
      ============================================================ -->
-<div id="viewRisk" class="hidden">
+<div id="viewRisk" class="hidden desk-grid">
 
   <!-- 毎日21:30の自動監視との連動バナー -->
   <div class="card banner" id="monitorBanner">
@@ -572,7 +694,7 @@
       <b>毎日21:30 自動監視と連動中</b>
       <span class="bn-chip" id="bnChip">—</span>
     </div>
-    <div class="bn-body">毎日21:30に、スプレッドシート「📘 2026年度 青色申告・帳簿マネージャー」と源泉徴収票・保険料控除の書類を自動でチェックしています。この画面の赤・黄判定も同じルールで動くので、ここが問題なければ監視側も静かに終わります。</div>
+    <div class="bn-body">毎日21:30に、帳簿データと源泉徴収票・保険料控除の書類を自動でチェックしています。この画面の赤・黄判定も同じルールで動くので、ここが問題なければ監視側も静かに終わります。</div>
     <div class="bn-sub" id="bnLast">—</div>
   </div>
 
@@ -590,6 +712,13 @@
       </select>
     </label>
     <div class="rate-note">売上は売上帳や入金履歴の年間合計を入れてください。控除は65万円の要件（e-Tax＋電子帳簿保存）を満たさない場合、55万円か10万円に切り替えると計算が現実に合います。</div>
+  </div>
+
+  <!-- 減価償却リスト（固定資産台帳） -->
+  <div class="card span2" id="depCard">
+    <div class="card-title"><span>🏷️ 減価償却リスト（固定資産台帳）</span><span class="count" id="depCount">0件</span></div>
+    <div class="rate-note" style="margin-top:0; margin-bottom:10px;">e-Tax青色申告決算書3ページ目「減価償却費の計算」と同じ並びです。資産名・取得年月・取得価額を入れると、定額法（または一括償却3年・少額特例）で本年分の償却費・必要経費算入額・期末残高を自動計算します。取得価額が分からない資産は空欄のままでOK（注記が出ます）。</div>
+    <div id="depBody"></div>
   </div>
 
   <div class="card">
@@ -631,26 +760,84 @@
 </div><!-- /viewRisk -->
 
 <!-- ============================================================
-     タブ4：e-Taxガイド
+     タブ4：PC版e-Tax 画面どおり入力ナビ
      ============================================================ -->
 <div id="viewGuide" class="hidden">
 
-  <div class="card">
-    <div class="card-title"><span>🗓️ この年度の申告スケジュール</span></div>
-    <div id="deadlineBox"></div>
-  </div>
+  <div class="etax-wrap">
 
-  <div id="guideSteps"></div>
+    <!-- 左：ステップ一覧（PCでは追従） -->
+    <aside class="etax-nav">
+      <div class="card">
+        <div class="card-title"><span>🖥️ PC版e-Tax 画面順</span><span class="count" id="guideNavCount"></span></div>
+        <div id="guideNav"></div>
+        <div class="rate-note">上から順に開いて、画面のボタン名どおりに進めます。各ステップの中の「⧉」を押すと数字がコピーされます。</div>
+      </div>
+    </aside>
 
-  <div class="card">
-    <div class="card-title"><span>🖊️ 今あなたの数字はどこへ打つか</span><span class="count" id="boardCount"></span></div>
-    <div class="rate-note" style="margin-top:0; margin-bottom:10px;">左がe-Taxの画面と項目名、右がこのアプリで集計した金額です。コピーを押すと数字だけがコピーされるので、そのまま金額欄に貼り付けられます。</div>
-    <div id="board"></div>
-    <div class="export-row">
-      <button class="btn-ghost" id="btnBoardTsv">📋 全部コピー（TSV）</button>
-      <button class="btn-ghost" id="btnBoardPrint">🖨️ 印刷する</button>
+    <!-- 右：期限・PC連携・ステップ本体 -->
+    <div class="etax-main">
+
+      <div class="card">
+        <div class="card-title"><span>🗓️ この年度の申告スケジュール</span></div>
+        <div id="deadlineBox"></div>
+      </div>
+
+      <div class="card" id="pcLinkCard">
+        <div class="card-title"><span>🖥️ PC連携：データ書き出し / 読み込み（JSON）</span></div>
+        <div class="json-row">
+          <button class="btn-ghost" data-json="export">📤 PC用データ書き出し（.json）</button>
+          <button class="btn-ghost" data-json="import">📥 データ読み込み（.json）</button>
+        </div>
+        <input type="file" id="fileJsonImport" accept=".json,application/json" hidden>
+        <div class="json-note">
+          スマホで「書き出し」を押して保存したファイルを、パソコンのブラウザで <b>https://yokomizomasaharu-sketch.github.io/receipt-excel/</b> を開いて「読み込み」で選ぶと、PCの大画面で同じデータ（経費帳・減価償却リスト・e-Taxコピー）をそのまま使えます。<br>
+          データはこの端末と選んだファイルの中だけにあり、GitHubや外部には送られません。<b>同じ年度は読み込んだ内容で置きかわります</b>（必要なときは先に書き出しておいてください）。
+        </div>
+      </div>
+
+      <div id="guideSteps"></div>
+
+      <div class="card" id="mynaCard">
+        <div class="card-title"><span>🪪 マイナポータル連携ナビ（設定手順＆XML取込）</span></div>
+        <div class="link-row">
+          <a class="btn-ghost" href="https://myna.go.jp/" target="_blank" rel="noopener">🪪 マイナポータル</a>
+          <a class="btn-ghost" href="https://www.nta.go.jp/taxes/tetsuzuki/mynumberinfo/mynapo.htm" target="_blank" rel="noopener">国税庁 連携特設</a>
+          <a class="btn-ghost" href="https://www.keisan.nta.go.jp/kyoutu/ky/sm/top" target="_blank" rel="noopener">作成コーナー</a>
+        </div>
+        <div class="step-item"><span class="no">1</span><span class="tx"><b>スマホにマイナポータルアプリを入れてログイン</b><span>マイナンバーカードをかざし、利用者証明用パスワード（4桁）でログイン。「わたしの情報」に、ねんきんネット・医療費通知・ふるさと納税・生命保険料・源泉徴収票が出るか確認します。出ないものは各事業者から控除証明書（XML）をダウンロードします。</span></span></div>
+        <div class="step-item"><span class="no">2</span><span class="tx"><b>PCの作成コーナーで「マイナポータルと連携する」を選ぶ</b><span>「提出方法等に関する質問」で「連携する」を選択（あとから「マイナポータル連携」の画面で選べます）。</span></span></div>
+        <div class="step-item"><span class="no">3</span><span class="tx"><b>PCに出たQRコードをスマホで読む</b><span>スマホでマイナンバーカードをかざすだけ。PCに戻ると、社会保険料・医療費・寄附金などが自動で入ります。</span></span></div>
+        <div class="step-item"><span class="no">4</span><span class="tx"><b>控除証明書XMLを取り込む（任意）</b><span>保険会社やマイナポータルから保存した .xml を選ぶと、項目名と金額を読み取って参考表示します。控除の詳細に反映することもできます。</span></span></div>
+        <button class="btn-ghost wide" id="btnXml" style="margin-top:8px;">📄 控除証明書等のXMLを選ぶ（任意）</button>
+        <input type="file" id="fileXml" accept=".xml,text/xml,application/xml" hidden>
+        <div id="mynaXmlResult"></div>
+        <div class="rate-note">マイナポータルは公的個人認証で守られた本人専用のサイトなので、外部アプリから直接データを取ることはできません。ここでは公式サイトを開く導線と、自分でダウンロードしたXMLの読み取りだけを行います（データは端末内で処理）。</div>
+      </div>
+
+      <div class="card" id="filingsCard">
+        <div class="card-title"><span>📝 各種届出・申請ナビ（開業届・住所変更・青色申請など）</span></div>
+        <div class="rate-note" style="margin-top:0; margin-bottom:10px;">パソコンやスマホから出せる手続きです。「何を出すか → どの画面を押すか → 何を入力するか」の順に開いてください。押すと国税庁の公式ページが開きます。</div>
+        <div id="filingsBody"></div>
+      </div>
+
+      <div class="card" id="resetCard">
+        <div class="card-title"><span>🔄 データを最新に一新（リセット＆再同期）</span></div>
+        <div class="rate-note" style="margin-top:0; margin-bottom:10px;">古いデータが残っていて表示が合わないとき、または最初からやり直したいときに使います。この端末の登録内容を消して、最新のプリセット（経費帳・減価償却リスト・源泉徴収票）で作り直します。<b>元に戻せません</b>ので、必要なら先に「PC用データ書き出し（.json）」でバックアップしてください。</div>
+        <button class="btn-ghost wide" id="btnResetAll" style="color:#b91c1c;border-color:#fecaca;">🔄 データを最新に一新する</button>
+      </div>
+
+      <div class="card">
+        <div class="card-title"><span>🖊️ 転記ボードをまとめて使う</span><span class="count" id="boardCount"></span></div>
+        <div class="rate-note" style="margin-top:0; margin-bottom:10px;">左がe-Taxの画面と項目名、右がこのアプリで集計した金額です。「⧉」を押すと数字だけがコピーされるので、そのまま金額欄に貼り付けられます。PCでは画面を並べて、スマホではこの画面を見ながら入力してください。</div>
+        <div class="export-row">
+          <button class="btn-ghost" id="btnBoardTsv">📋 全部コピー（TSV）</button>
+          <button class="btn-ghost" id="btnBoardPrint">🖨️ 印刷する</button>
+        </div>
+        <div class="rate-note">e-Taxの画面は「確定申告書等作成コーナー」の令和8年分以降の構成です。年度によって文言が少し変わることがあります。</div>
+      </div>
+
     </div>
-    <div class="rate-note">e-Taxの画面は「確定申告書等作成コーナー」の令和8年分以降の構成です。年度によって文言が少し変わることがあります。</div>
   </div>
 
 </div><!-- /viewGuide -->
@@ -667,6 +854,6 @@
 
 <script src="./vendor/xlsx.full.min.js"></script>
 <script src="./vendor/tesseract.min.js"></script>
-<script src="./app.js?v=2026-11-17d"></script>
+<script src="./app.js?v=2026-11-25a"></script>
 </body>
 </html>
